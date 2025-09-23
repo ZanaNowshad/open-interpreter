@@ -1,11 +1,3 @@
-def format_to_recipient(text, recipient):
-    return f"@@@RECIPIENT:{recipient}@@@CONTENT:{text}@@@END"
+"""Compatibility shim for :mod:`open_interpreter.core.computer.utils.recipient_utils`."""
 
-
-def parse_for_recipient(content):
-    if content.startswith("@@@RECIPIENT:") and "@@@END" in content:
-        parts = content.split("@@@")
-        recipient = parts[1].split(":")[1]
-        new_content = parts[2].split(":")[1]
-        return recipient, new_content
-    return None, content
+from open_interpreter.core.computer.utils.recipient_utils import *  # noqa: F401,F403

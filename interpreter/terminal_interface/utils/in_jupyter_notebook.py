@@ -1,8 +1,3 @@
-def in_jupyter_notebook():
-    try:
-        from IPython import get_ipython
+"""Compatibility shim for :mod:`open_interpreter.interfaces.terminal.utils.in_jupyter_notebook`."""
 
-        if "IPKernelApp" in get_ipython().config:
-            return True
-    except:
-        return False
+from open_interpreter.interfaces.terminal.utils.in_jupyter_notebook import *  # noqa: F401,F403

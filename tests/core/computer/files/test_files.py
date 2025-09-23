@@ -1,14 +1,14 @@
 import unittest
 from unittest import mock
 
-from interpreter.core.computer.files.files import Files
+from open_interpreter.core.computer.files.files import Files
 
 
 class TestFiles(unittest.TestCase):
     def setUp(self):
         self.files = Files(mock.Mock())
 
-    @mock.patch("interpreter.core.computer.files.files.aifs")
+    @mock.patch("open_interpreter.core.computer.files.files.aifs")
     def test_search(self, mock_aifs):
         # Arrange
         mock_args = ["foo", "bar"]
@@ -26,7 +26,7 @@ class TestFiles(unittest.TestCase):
         mock_write = mock_open.return_value.write
 
         # Act
-        with mock.patch("interpreter.core.computer.files.files.open", mock_open):
+        with mock.patch("open_interpreter.core.computer.files.files.open", mock_open):
             self.files.edit("example/filepath/file", "foobar", "foobarbaz")
 
         # Assert
@@ -40,7 +40,7 @@ class TestFiles(unittest.TestCase):
 
         # Act
         with self.assertRaises(ValueError) as context_manager:
-            with mock.patch("interpreter.core.computer.files.files.open", mock_open):
+            with mock.patch("open_interpreter.core.computer.files.files.open", mock_open):
                 self.files.edit("example/filepath/file", "barbaz", "foobarbaz")
 
         # Assert
