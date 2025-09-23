@@ -35,7 +35,7 @@ def _register_if_missing(
 
 
 def _create_computer(interpreter: Any):
-    from interpreter.core.computer.computer import Computer
+    from open_interpreter.core.computer.computer import Computer
 
     return Computer(interpreter)
 
@@ -71,7 +71,7 @@ def _create_conversation_manager(
 
 
 def _create_telemetry_dispatcher(interpreter: Any | None = None):
-    from interpreter.core.utils.telemetry import send_telemetry
+    from open_interpreter.core.telemetry.sender import send_telemetry
 
     return TelemetryDispatcher(send_telemetry)
 

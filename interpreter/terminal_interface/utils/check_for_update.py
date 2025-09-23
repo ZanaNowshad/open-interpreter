@@ -1,14 +1,3 @@
-from importlib.metadata import version, PackageNotFoundError
-import requests
+"""Compatibility shim for :mod:`open_interpreter.interfaces.terminal.utils.check_for_update`."""
 
-
-
-def check_for_update():
-    # Fetch the latest version from the PyPI API
-    response = requests.get(f"https://pypi.org/pypi/open-interpreter/json")
-    latest_version = response.json()["info"]["version"]
-
-    # Get the current version using importlib.metadata
-    current_version = version("open-interpreter")
-
-    return latest_version > current_version
+from open_interpreter.interfaces.terminal.utils.check_for_update import *  # noqa: F401,F403

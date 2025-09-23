@@ -1,7 +1,7 @@
 import os
 from unittest import TestCase, mock
 
-from interpreter.core.async_core import AsyncInterpreter, Server
+from open_interpreter.core.async_core import AsyncInterpreter, Server
 
 
 class TestServerConstruction(TestCase):

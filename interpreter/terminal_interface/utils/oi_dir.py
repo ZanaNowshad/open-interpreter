@@ -1,7 +1,3 @@
-"""Compatibility shim exposing the interpreter configuration directory."""
+"""Compatibility shim for :mod:`open_interpreter.interfaces.terminal.utils.oi_dir`."""
 
-from __future__ import annotations
-
-from open_interpreter.infrastructure.storage import OI_CONFIG_DIR as oi_dir
-
-__all__ = ["oi_dir"]
+from open_interpreter.interfaces.terminal.utils.oi_dir import *  # noqa: F401,F403

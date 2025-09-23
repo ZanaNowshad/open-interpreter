@@ -1,17 +1,3 @@
-def cli_input(prompt: str = "") -> str:
-    start_marker = '"""'
-    end_marker = '"""'
-    message = input(prompt)
+"""Compatibility shim for :mod:`open_interpreter.interfaces.terminal.utils.cli_input`."""
 
-    # Multi-line input mode
-    if start_marker in message:
-        lines = [message]
-        while True:
-            line = input()
-            lines.append(line)
-            if end_marker in line:
-                break
-        return "\n".join(lines)
-
-    # Single-line input mode
-    return message
+from open_interpreter.interfaces.terminal.utils.cli_input import *  # noqa: F401,F403

@@ -13,10 +13,7 @@ import openai
 from collections.abc import Generator
 from typing import Any, Dict
 
-from interpreter.core.render_message import render_message
-from interpreter.terminal_interface.utils.display_markdown_message import (
-    display_markdown_message,
-)
+from open_interpreter.core.ui import display_markdown_message, render_message
 
 
 def respond(interpreter):

@@ -7,8 +7,8 @@ from random import randint
 import pytest
 
 #####
-from interpreter import AsyncInterpreter, OpenInterpreter
-from interpreter.terminal_interface.utils.count_tokens import (
+from open_interpreter.runtime import AsyncInterpreter, OpenInterpreter
+from open_interpreter.interfaces.terminal.utils.count_tokens import (
     count_messages_tokens,
     count_tokens,
 )
