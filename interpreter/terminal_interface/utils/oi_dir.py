@@ -1,3 +1,7 @@
-import platformdirs
+"""Compatibility shim exposing the interpreter configuration directory."""
 
-oi_dir = platformdirs.user_config_dir("open-interpreter")
+from __future__ import annotations
+
+from open_interpreter.infrastructure.storage import OI_CONFIG_DIR as oi_dir
+
+__all__ = ["oi_dir"]

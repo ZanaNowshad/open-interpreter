@@ -1,4 +1,11 @@
 import sys
+from pathlib import Path
+
+_SRC_PATH = Path(__file__).resolve().parent.parent / "src"
+if _SRC_PATH.exists():
+    src_path = str(_SRC_PATH)
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
 
 if "--os" in sys.argv:
     from rich import print as rich_print
