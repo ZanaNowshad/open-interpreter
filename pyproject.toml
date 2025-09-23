@@ -2,6 +2,7 @@
 name = "open-interpreter"
 packages = [
     {include = "interpreter"},
+    {include = "open_interpreter", from = "src"},
     {include = "scripts"},
 ]
 version = "0.4.3" # Use "-rc1", "-rc2", etc. for pre-release versions

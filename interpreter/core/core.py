@@ -2,22 +2,17 @@
 This file defines the Interpreter class.
 It's the main file. `from interpreter import interpreter` will import an instance of this class.
 """
-import json
-import os
 import threading
 import time
-from datetime import datetime
+
+from open_interpreter.services import build_service_context
 
 from ..terminal_interface.local_setup import local_setup
 from ..terminal_interface.terminal_interface import terminal_interface
 from ..terminal_interface.utils.display_markdown_message import display_markdown_message
 from ..terminal_interface.utils.local_storage_path import get_storage_path
 from ..terminal_interface.utils.oi_dir import oi_dir
-from .computer.computer import Computer
 from .default_system_message import default_system_message
-from .llm.llm import Llm
-from .respond import respond
-from .utils.telemetry import send_telemetry
 from .utils.truncate_output import truncate_output
 
 
@@ -81,6 +76,27 @@ class OpenInterpreter:
         contribute_conversation=False,
         plain_text_display=False,
     ):
+        # Ensure configuration required by service providers is in place before
+        # we resolve the modular runtime context.
+        self.max_output = max_output
+
+        self.runtime = build_service_context(
+            interpreter=self,
+            computer=computer,
+            llm=llm,
+        )
+        self.services = self.runtime.registry
+        self.state = self.runtime.conversation_state
+        self.history_manager = self.runtime.conversation_history
+        self.execution = self.runtime.execution
+        self.capability_registry = self.runtime.capability_registry
+        self.message_renderer = self.runtime.message_renderer
+        self.conversation_manager = self.runtime.conversation_manager
+
+        self._telemetry_dispatch = self.runtime.telemetry
+        if not callable(self._telemetry_dispatch):
+            self._telemetry_dispatch = lambda *args, **kwargs: None
+
         # State
         self.messages = [] if messages is None else messages
         self.responding = False
@@ -91,7 +107,6 @@ class OpenInterpreter:
         self.auto_run = auto_run
         self.verbose = verbose
         self.debug = debug
-        self.max_output = max_output
         self.safe_mode = safe_mode
         self.shrink_images = shrink_images
         self.disable_telemetry = disable_telemetry
@@ -116,7 +131,7 @@ class OpenInterpreter:
         self.speak_messages = speak_messages
 
         # Computer
-        self.computer = Computer(self) if computer is None else computer
+        self.computer = self.runtime.computer
         self.sync_computer = sync_computer
         self.computer.import_computer_api = import_computer_api
 
@@ -127,7 +142,7 @@ class OpenInterpreter:
         self.computer.import_skills = import_skills
 
         # LLM
-        self.llm = Llm(self) if llm is None else llm
+        self.llm = self.runtime.llm
 
         # These are LLM related
         self.system_message = system_message
@@ -137,6 +152,30 @@ class OpenInterpreter:
         self.code_output_template = code_output_template
         self.empty_code_output_template = empty_code_output_template
         self.code_output_sender = code_output_sender
+
+    @property
+    def messages(self):
+        return self.conversation_manager.messages
+
+    @messages.setter
+    def messages(self, value):
+        self.conversation_manager.messages = value
+
+    @property
+    def responding(self):
+        return self.conversation_manager.responding
+
+    @responding.setter
+    def responding(self, value):
+        self.conversation_manager.responding = value
+
+    @property
+    def last_messages_count(self):
+        return self.conversation_manager.last_messages_count
+
+    @last_messages_count.setter
+    def last_messages_count(self, value):
+        self.conversation_manager.last_messages_count = value
 
     def local_setup(self):
         """
@@ -148,7 +187,7 @@ class OpenInterpreter:
         while self.responding:
             time.sleep(0.2)
         # Return new messages
-        return self.messages[self.last_messages_count :]
+        return self.conversation_manager.new_messages()
 
     @property
     def anonymous_telemetry(self) -> bool:
@@ -168,7 +207,7 @@ class OpenInterpreter:
                 message_type = type(
                     message
                 ).__name__  # Only send message type, no content
-                send_telemetry(
+                self._telemetry_dispatch(
                     "started_chat",
                     properties={
                         "in_terminal_interface": self.in_terminal_interface,
@@ -202,7 +241,7 @@ class OpenInterpreter:
             self.responding = False
             if self.anonymous_telemetry:
                 message_type = type(message).__name__
-                send_telemetry(
+                self._telemetry_dispatch(
                     "errored",
                     properties={
                         "error": str(e),
@@ -242,7 +281,7 @@ class OpenInterpreter:
 
             # Now that the user's messages have been added, we set last_messages_count.
             # This way we will only return the messages after what they added.
-            self.last_messages_count = len(self.messages)
+            self.conversation_manager.mark_checkpoint()
 
             # DISABLED because I think we should just not transmit images to non-multimodal models?
             # REENABLE this when multimodal becomes more common:
@@ -258,36 +297,7 @@ class OpenInterpreter:
             # This is where it all happens!
             yield from self._respond_and_store()
 
-            # Save conversation if we've turned conversation_history on
-            if self.conversation_history:
-                # If it's the first message, set the conversation name
-                if not self.conversation_filename:
-                    first_few_words_list = self.messages[0]["content"][:25].split(" ")
-                    if (
-                        len(first_few_words_list) >= 2
-                    ):  # for languages like English with blank between words
-                        first_few_words = "_".join(first_few_words_list[:-1])
-                    else:  # for languages like Chinese without blank between words
-                        first_few_words = self.messages[0]["content"][:15]
-                    for char in '<>:"/\\|?*!\n':  # Invalid characters for filenames
-                        first_few_words = first_few_words.replace(char, "")
-
-                    date = datetime.now().strftime("%B_%d_%Y_%H-%M-%S")
-                    self.conversation_filename = (
-                        "__".join([first_few_words, date]) + ".json"
-                    )
-
-                # Check if the directory exists, if not, create it
-                if not os.path.exists(self.conversation_history_path):
-                    os.makedirs(self.conversation_history_path)
-                # Write or overwrite the file
-                with open(
-                    os.path.join(
-                        self.conversation_history_path, self.conversation_filename
-                    ),
-                    "w",
-                ) as f:
-                    json.dump(self.messages, f)
+            self.conversation_manager.persist_history(self)
             return
 
         raise Exception(
@@ -315,7 +325,7 @@ class OpenInterpreter:
         last_flag_base = None
 
         try:
-            for chunk in respond(self):
+            for chunk in self.execution.stream(self):
                 # For async usage
                 if hasattr(self, "stop_event") and self.stop_event.is_set():
                     print("Open Interpreter stopping.")
@@ -430,8 +440,7 @@ class OpenInterpreter:
     def reset(self):
         self.computer.terminate()  # Terminates all languages
         self.computer._has_imported_computer_api = False  # Flag reset
-        self.messages = []
-        self.last_messages_count = 0
+        self.conversation_manager.reset()
 
     def display_message(self, markdown):
         # This is just handy for start_script in profiles.

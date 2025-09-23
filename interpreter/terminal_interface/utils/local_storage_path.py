@@ -1,13 +1,13 @@
-import os
+"""Compatibility shim for storage path resolution."""
 
-import platformdirs
+from __future__ import annotations
 
-# Using platformdirs to determine user-specific config path
-config_dir = platformdirs.user_config_dir("open-interpreter")
+from open_interpreter.infrastructure.storage import get_storage_path as _get_storage_path
+
+__all__ = ["get_storage_path"]
 
 
 def get_storage_path(subdirectory=None):
-    if subdirectory is None:
-        return config_dir
-    else:
-        return os.path.join(config_dir, subdirectory)
+    """Return storage locations via the modular infrastructure helper."""
+
+    return _get_storage_path(subdirectory)

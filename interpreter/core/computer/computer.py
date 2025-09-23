@@ -1,6 +1,8 @@
 import inspect
 import json
 
+from open_interpreter.capabilities import capability_registry
+
 from .ai.ai import Ai
 from .browser.browser import Browser
 from .calendar.calendar import Calendar
@@ -76,6 +78,8 @@ Do not import the computer module, or any of its sub-modules. They are already i
 
     """.strip()
 
+        self._register_capabilities()
+
     # Shortcut for computer.terminal.languages
     @property
     def languages(self):
@@ -103,6 +107,16 @@ Do not import the computer module, or any of its sub-modules. They are already i
             self.ai,
             self.files,
         ]
+
+    def _register_capabilities(self):
+        for tool in self._get_all_computer_tools_list():
+            name = f"computer.{tool.__class__.__name__.lower()}"
+            description = (tool.__doc__ or "").strip()
+            capability_registry.register_tool(
+                name=name,
+                provider=tool,
+                description=description,
+            )
 
     def _get_all_computer_tools_signature_and_description(self):
         """
