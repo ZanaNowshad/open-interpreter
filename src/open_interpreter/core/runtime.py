@@ -75,6 +75,9 @@ class OpenInterpreter:
         multi_line=True,
         contribute_conversation=False,
         plain_text_display=False,
+        service_registry=None,
+        service_overrides=None,
+        message_renderer=None,
     ):
         # Ensure configuration required by service providers is in place before
         # we resolve the modular runtime context.
@@ -82,8 +85,11 @@ class OpenInterpreter:
 
         self.runtime = build_service_context(
             interpreter=self,
+            registry=service_registry,
             computer=computer,
             llm=llm,
+            message_renderer=message_renderer,
+            overrides=service_overrides,
         )
         self.services = self.runtime.registry
         self.state = self.runtime.conversation_state
