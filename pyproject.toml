@@ -3,6 +3,7 @@ name = "open-interpreter"
 packages = [
     {include = "interpreter"},
     {include = "open_interpreter", from = "src"},
+    {include = "open_agent", from = "src"},
     {include = "scripts"},
 ]
 version = "0.4.3" # Use "-rc1", "-rc2", etc. for pre-release versions
@@ -94,6 +95,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.scripts]
 i = "open_interpreter.interfaces.terminal.start_terminal_interface:main"
 interpreter = "open_interpreter.interfaces.terminal.start_terminal_interface:main"
+agent = "open_interpreter.interfaces.terminal.start_terminal_interface:main"
 wtf = "scripts.wtf:main"
 interpreter-classic = "open_interpreter.interfaces.terminal.start_terminal_interface:main"
 

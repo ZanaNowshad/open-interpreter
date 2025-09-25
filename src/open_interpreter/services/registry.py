@@ -1,7 +1,5 @@
 """Runtime service registry used to orchestrate interpreter dependencies."""
 
-"""Runtime service registry coordinating modular components."""
-
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -106,6 +104,16 @@ class ServiceRegistry:
 
         with self._lock:
             return tuple(sorted(self._providers.keys()))
+
+    def copy(self, *, include_singletons: bool = True) -> "ServiceRegistry":
+        """Create a shallow copy of the registry configuration."""
+
+        clone = ServiceRegistry()
+        with self._lock:
+            clone._providers = dict(self._providers)
+            if include_singletons:
+                clone._singletons = dict(self._singletons)
+        return clone
 
     @contextmanager
     def temporary_override(
