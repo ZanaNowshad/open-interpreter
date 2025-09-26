@@ -3,7 +3,7 @@ import os
 import sys
 import time
 
-from importlib.metadata import version, PackageNotFoundError
+from importlib.metadata import version
 
 from open_interpreter.interfaces.terminal.contributing_conversations import (
     contribute_conversation_launch_logic,
