@@ -473,6 +473,11 @@ Use """ to write multi-line messages.
         args.profile or get_argument_dictionary(arguments, "profile")["default"],
     )
 
+    profile_argument = get_argument_dictionary(arguments, "profile")
+    interpreter.active_profile = args.profile or profile_argument.get(
+        "default", "default.yaml"
+    )
+
     ### Set attributes on interpreter, because the arguments passed in via the CLI should override profile
 
     set_attributes(args, arguments)

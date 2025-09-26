@@ -1,6 +1,8 @@
 import platform
 import subprocess
 
+from open_interpreter.interfaces.terminal.components.ui import format_notification
+
 
 class Os:
     def __init__(self, computer):
@@ -20,12 +22,14 @@ class Os:
         self.computer.clipboard.copy(current_clipboard)
         return selected_text
 
-    def notify(self, text):
+    def notify(self, text, status: str | None = None):
         """
         Displays a notification on the computer.
         """
         try:
             title = "Open Interpreter"
+
+            text = format_notification(text, status=status)
 
             if len(text) > 200:
                 text = text[:200] + "..."

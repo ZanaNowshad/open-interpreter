@@ -324,7 +324,9 @@ def terminal_interface(interpreter, message):
                         )
 
                         # Display notification in OS mode
-                        interpreter.computer.os.notify(sanitized_message)
+                        interpreter.computer.os.notify(
+                            sanitized_message, status="info"
+                        )
 
                         # Speak message aloud
                         if platform.system() == "Darwin" and interpreter.speak_messages:
@@ -501,7 +503,9 @@ def terminal_interface(interpreter, message):
                                     description = f"Getting selected text."
 
                                 if description:
-                                    interpreter.computer.os.notify(description)
+                                    interpreter.computer.os.notify(
+                                        description, status="pending"
+                                    )
 
                     if "start" in chunk:
                         # We need to make a code block if we pushed out an HTML block first, which would have closed our code block.

@@ -369,7 +369,7 @@ There is **experimental** support for a [safe mode](https://github.com/OpenInter
 
 Open Interpreter equips a [function-calling language model](https://platform.openai.com/docs/guides/gpt/function-calling) with an `exec()` function, which accepts a `language` (like "Python" or "JavaScript") and `code` to run.
 
-We then stream the model's messages, code, and your system's outputs to the terminal as Markdown.
+We then stream the model's messages, code, and your system's outputs to the terminal as Markdown. The same renderer now powers our README and documentation examples, keeping role icons and code block theming consistent between the live terminal and published guides.
 
 # Access Documentation Offline
 
