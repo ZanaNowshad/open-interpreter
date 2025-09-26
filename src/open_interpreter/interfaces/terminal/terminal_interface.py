@@ -8,6 +8,7 @@ try:
 except ImportError:
     pass
 
+import difflib
 import os
 import platform
 import random
@@ -15,12 +16,14 @@ import re
 import subprocess
 import tempfile
 import time
+from typing import Any, Dict, Optional
 
 from ..core.utils.scan_code import scan_code
 from ..core.utils.system_debug_info import system_info
 from ..core.utils.truncate_output import truncate_output
 from .components.code_block import CodeBlock
 from .components.message_block import MessageBlock
+from .components.ui import ReviewPanel, status_bar
 from .magic_commands import handle_magic_command
 from .utils.check_for_package import check_for_package
 from .utils.cli_input import cli_input
@@ -79,6 +82,11 @@ def terminal_interface(interpreter, message):
 
     active_block = None
     voice_subprocess = None
+
+    preferences = _ensure_preferences(interpreter)
+
+    if not interpreter.plain_text_display:
+        _update_status_bar(interpreter)
 
     while True:
         if interactive:
@@ -198,67 +206,50 @@ def terminal_interface(interpreter, message):
                         language = code_to_run["format"]
                         code = code_to_run["content"]
 
-                        should_scan_code = False
+                        preferences = _ensure_preferences(interpreter)
 
-                        if not interpreter.safe_mode == "off":
-                            if interpreter.safe_mode == "auto":
-                                should_scan_code = True
-                            elif interpreter.safe_mode == "ask":
-                                response = input(
-                                    "  Would you like to scan this code? (y/n)\n\n  "
+                        panel = ReviewPanel(
+                            code_origin=_determine_code_origin(interpreter),
+                            diff_summary=_summarize_diff(
+                                preferences.get("last_executed_code"), code
+                            ),
+                            risk_level=_assess_risk(code, preferences.get("scan", False)),
+                            runtime_estimate=_estimate_runtime(code),
+                            scan_enabled=preferences.get("scan", False),
+                            default_action=preferences.get("default_action", "approve"),
+                            preferences=preferences,
+                            safe_mode=interpreter.safe_mode,
+                            status_callback=lambda: _update_status_bar(interpreter),
+                        )
+
+                        decision = panel.prompt()
+
+                        if decision.default_action:
+                            preferences["default_action"] = decision.default_action
+
+                        preferences["scan"] = decision.scan_enabled
+
+                        action = decision.action
+
+                        if action == "skip":
+                            preferences["last_decision"] = "Skipped"
+                            if interpreter.safe_mode == "off":
+                                preferences["last_scan_status"] = _log_scan_result(
+                                    interpreter,
+                                    {"status": "not_required", "summary": "Safe mode disabled."},
+                                    language,
                                 )
-                                print("")  # <- Aesthetic choice
-
-                                if response.strip().lower() == "y":
-                                    should_scan_code = True
-
-                        if should_scan_code:
-                            scan_code(code, language, interpreter)
-
-                        if interpreter.plain_text_display:
-                            response = input(
-                                "Would you like to run this code? (y/n)\n\n"
+                            else:
+                                preferences["last_scan_status"] = _log_scan_result(
+                                    interpreter, None, language
+                                )
+                            _log_transcript(
+                                interpreter,
+                                label="APPROVAL",
+                                message="Execution skipped.",
+                                emoji="no_entry_sign",
+                                style="red",
                             )
-                        else:
-                            response = input(
-                                "  Would you like to run this code? (y/n)\n\n  "
-                            )
-                        print("")  # <- Aesthetic choice
-
-                        if response.strip().lower() == "y":
-                            # Create a new, identical block where the code will actually be run
-                            # Conveniently, the chunk includes everything we need to do this:
-                            active_block = CodeBlock(interpreter)
-                            active_block.margin_top = False  # <- Aesthetic choice
-                            active_block.language = language
-                            active_block.code = code
-                        elif response.strip().lower() == "e":
-                            # Edit
-
-                            # Create a temporary file
-                            with tempfile.NamedTemporaryFile(
-                                suffix=".tmp", delete=False
-                            ) as tf:
-                                tf.write(code.encode())
-                                tf.flush()
-
-                            # Open the temporary file with the default editor
-                            subprocess.call([os.environ.get("EDITOR", "vim"), tf.name])
-
-                            # Read the modified code
-                            with open(tf.name, "r") as tf:
-                                code = tf.read()
-
-                            interpreter.messages[-1]["content"] = code  # Give it code
-
-                            # Delete the temporary file
-                            os.unlink(tf.name)
-                            active_block = CodeBlock()
-                            active_block.margin_top = False  # <- Aesthetic choice
-                            active_block.language = language
-                            active_block.code = code
-                        else:
-                            # User declined to run code.
                             interpreter.messages.append(
                                 {
                                     "role": "user",
@@ -266,7 +257,54 @@ def terminal_interface(interpreter, message):
                                     "content": "I have declined to run this code.",
                                 }
                             )
+                            _update_status_bar(interpreter)
                             break
+
+                        if action == "edit":
+                            code = _launch_editor(code, language)
+                            interpreter.messages[-1]["content"] = code
+                            preferences["last_decision"] = "Edited"
+                            _log_transcript(
+                                interpreter,
+                                label="APPROVAL",
+                                message="Code edited prior to execution.",
+                                emoji="memo",
+                                style="cyan",
+                            )
+                        else:
+                            preferences["last_decision"] = "Approved"
+                            _log_transcript(
+                                interpreter,
+                                label="APPROVAL",
+                                message="Execution approved.",
+                                emoji="white_check_mark",
+                                style="green",
+                            )
+
+                        scan_summary = None
+                        if decision.scan_enabled and interpreter.safe_mode != "off":
+                            scan_summary = scan_code(code, language, interpreter)
+                            preferences["last_scan_status"] = _log_scan_result(
+                                interpreter, scan_summary, language
+                            )
+                        elif interpreter.safe_mode == "off":
+                            preferences["last_scan_status"] = _log_scan_result(
+                                interpreter,
+                                {"status": "not_required", "summary": "Safe mode disabled."},
+                                language,
+                            )
+                        else:
+                            preferences["last_scan_status"] = _log_scan_result(
+                                interpreter, None, language
+                            )
+
+                        preferences["last_executed_code"] = code
+                        _update_status_bar(interpreter)
+
+                        active_block = CodeBlock(interpreter)
+                        active_block.margin_top = False  # <- Aesthetic choice
+                        active_block.language = language
+                        active_block.code = code
 
                 # Plain text mode
                 if interpreter.plain_text_display:
@@ -539,3 +577,237 @@ def terminal_interface(interpreter, message):
             if interpreter.debug:
                 system_info(interpreter)
             raise
+
+
+def _ensure_preferences(interpreter) -> Dict[str, Any]:
+    existing = getattr(interpreter, "terminal_preferences", None)
+    if not isinstance(existing, dict):
+        existing = {}
+
+    defaults: Dict[str, Any] = {
+        "scan": interpreter.safe_mode != "off",
+        "default_action": "approve",
+        "last_decision": None,
+        "last_scan_status": None,
+        "last_executed_code": "",
+    }
+
+    for key, value in defaults.items():
+        existing.setdefault(key, value)
+
+    interpreter.terminal_preferences = existing
+    return existing
+
+
+def _update_status_bar(interpreter) -> None:
+    if getattr(interpreter, "plain_text_display", False):
+        return
+    preferences = _ensure_preferences(interpreter)
+    status_bar.update(preferences, interpreter.safe_mode)
+
+
+def _determine_code_origin(interpreter) -> str:
+    model_name = getattr(interpreter.llm, "model", None)
+    origin = model_name or "Assistant"
+    last_assistant_code = next(
+        (
+            message
+            for message in reversed(interpreter.messages)
+            if message.get("role") == "assistant" and message.get("type") == "code"
+        ),
+        None,
+    )
+    if last_assistant_code and last_assistant_code.get("metadata"):
+        origin = last_assistant_code["metadata"].get("origin", origin)
+    return origin
+
+
+def _summarize_diff(previous_code: Optional[str], current_code: str) -> str:
+    if not previous_code:
+        return "No previous execution."
+
+    diff_lines = list(
+        difflib.unified_diff(
+            previous_code.splitlines(),
+            current_code.splitlines(),
+            fromfile="previous",
+            tofile="current",
+            lineterm="",
+        )
+    )
+    diff_lines = [line for line in diff_lines if line.strip()]
+
+    if not diff_lines:
+        return "No changes since last run."
+
+    max_lines = 12
+    if len(diff_lines) > max_lines:
+        diff_lines = diff_lines[:max_lines] + ["..."]
+    return "\n".join(diff_lines)
+
+
+def _assess_risk(code: str, scan_enabled: bool) -> str:
+    lowered = code.lower()
+    high_risk_patterns = ["rm -rf", "del /q", "shutdown", "format ", "drop table", "sudo"]
+    medium_risk_patterns = [
+        "subprocess",
+        "os.remove",
+        "shutil.rmtree",
+        "eval(",
+        "exec(",
+        "while true",
+    ]
+
+    risk_level = "Low"
+    style = "green"
+
+    if any(pattern in lowered for pattern in high_risk_patterns):
+        risk_level = "High"
+        style = "red"
+    elif any(pattern in lowered for pattern in medium_risk_patterns) or len(code.splitlines()) > 80:
+        risk_level = "Moderate"
+        style = "yellow"
+
+    suffix = " (scan enabled)" if scan_enabled else " (scan off)"
+    return f"[{style}]{risk_level}[/] risk{suffix}"
+
+
+def _estimate_runtime(code: str) -> str:
+    line_count = len([line for line in code.splitlines() if line.strip()])
+    long_running_signals = ["time.sleep", "asyncio.sleep", "subprocess.run", "requests.get"]
+
+    if any(signal in code for signal in long_running_signals):
+        return "Likely longer (>10s)"
+    if line_count <= 10:
+        return "Short (<2s)"
+    if line_count <= 40:
+        return "Moderate (≈5s)"
+    return "Extended (>10s)"
+
+
+def _launch_editor(code: str, language: str) -> str:
+    suffix = ".tmp"
+    if language:
+        sanitized = re.sub(r"[^a-zA-Z0-9]+", "", language.split("/")[-1])
+        if sanitized:
+            suffix = f".{sanitized}"
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+        temp_file.write(code.encode())
+        temp_file.flush()
+        temp_path = temp_file.name
+
+    try:
+        subprocess.call([os.environ.get("EDITOR", "vim"), temp_path])
+        with open(temp_path, "r") as updated:
+            return updated.read()
+    finally:
+        try:
+            os.unlink(temp_path)
+        except FileNotFoundError:
+            pass
+
+
+def _log_transcript(
+    interpreter,
+    *,
+    label: str,
+    message: str,
+    emoji: str = "memo",
+    style: str = "green",
+) -> None:
+    content = f":{emoji}: [bold {style}][{label}][/bold {style}] {message}"
+    entry = {
+        "role": "system",
+        "type": "message",
+        "content": content,
+        "recipient": "user",
+    }
+    interpreter.messages.append(entry)
+    interpreter.display_message(content)
+
+
+def _log_scan_result(
+    interpreter,
+    scan_result: Optional[Dict[str, Any]],
+    language: str,
+) -> str:
+    language_label = language or "code"
+
+    if not scan_result:
+        _log_transcript(
+            interpreter,
+            label="SCAN",
+            message=f"{language_label} scan skipped by user.",
+            emoji="shield",
+            style="yellow",
+        )
+        return "Skipped"
+
+    status = str(scan_result.get("status", "unknown")).lower()
+    summary = scan_result.get("summary", "") or ""
+    output = scan_result.get("output", "") or ""
+
+    if status == "passed":
+        message = summary or f"No issues were found in this {language_label} code."
+        _log_transcript(
+            interpreter,
+            label="SCAN",
+            message=message,
+            emoji="shield",
+            style="green",
+        )
+        return "Passed"
+
+    if status in {"issues", "failed"}:
+        snippet = _truncate_text(summary or output)
+        detail = f"\n\n```\n{snippet}\n```" if snippet else ""
+        _log_transcript(
+            interpreter,
+            label="SCAN",
+            message=f"Potential issues detected in {language_label}.{detail}",
+            emoji="shield",
+            style="red",
+        )
+        return "Issues detected"
+
+    if status in {"error", "exception"}:
+        message = summary or "Scan encountered an error."
+        _log_transcript(
+            interpreter,
+            label="SCAN",
+            message=f"Scan error for {language_label}: {message}",
+            emoji="shield",
+            style="yellow",
+        )
+        return "Error"
+
+    if status in {"skipped", "not required", "not_required"}:
+        message = summary or f"{language_label} scan skipped."
+        _log_transcript(
+            interpreter,
+            label="SCAN",
+            message=message,
+            emoji="shield",
+            style="yellow",
+        )
+        if status in {"not required", "not_required"}:
+            return "Not required"
+        return "Skipped"
+
+    message = summary or f"Scan status: {status}."
+    _log_transcript(
+        interpreter,
+        label="SCAN",
+        message=message,
+        emoji="shield",
+        style="yellow",
+    )
+    return status.title()
+
+
+def _truncate_text(text: str, limit: int = 400) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
