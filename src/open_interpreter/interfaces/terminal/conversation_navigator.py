@@ -81,7 +81,7 @@ def conversation_navigator(interpreter):
         messages = json.load(f)
 
     # Pass the data into render_past_conversation
-    render_past_conversation(messages)
+    render_past_conversation(messages, theme=interpreter.display_theme)
 
     # Set the interpreter's settings to the loaded messages
     interpreter.messages = messages

@@ -5,16 +5,20 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from .base_block import BaseBlock
+from .theme_tokens import ThemeTokens, get_theme
 
 
 class MessageBlock(BaseBlock):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, theme: str | ThemeTokens | None = None):
+        super().__init__(theme)
 
         self.type = "message"
         self.message = ""
 
-    def refresh(self, cursor=True):
+    def refresh(self, cursor=True, theme: str | ThemeTokens | None = None):
+        if theme is not None:
+            self._theme = get_theme(theme)
+
         # De-stylize any code blocks in markdown,
         # to differentiate from our Code Blocks
         content = textify_markdown_code_blocks(self.message)
@@ -22,8 +26,16 @@ class MessageBlock(BaseBlock):
         if cursor:
             content += "●"
 
-        markdown = Markdown(content.strip())
-        panel = Panel(markdown, box=MINIMAL)
+        markdown = Markdown(content.strip(), style=self.theme.message_text_style)
+        border_style = (
+            self.theme.focus_border_style if cursor or self.focused else self.theme.message_border_style
+        )
+        panel = Panel(
+            markdown,
+            box=MINIMAL,
+            style=self.theme.message_panel_style,
+            border_style=border_style,
+        )
         self.live.update(panel)
         self.live.refresh()
 

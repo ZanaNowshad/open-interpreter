@@ -5,10 +5,12 @@ This is all messed up.... Uses the old streaming structure.
 
 from .components.code_block import CodeBlock
 from .components.message_block import MessageBlock
+from .components.theme_tokens import get_theme
 from .utils.display_markdown_message import display_markdown_message
 
 
-def render_past_conversation(messages):
+def render_past_conversation(messages, theme=None):
+    theme_tokens = get_theme(theme)
     # This is a clone of the terminal interface.
     # So we should probably find a way to deduplicate...
 
@@ -28,21 +30,21 @@ def render_past_conversation(messages):
         # Message
         if chunk["type"] == "message":
             if active_block is None:
-                active_block = MessageBlock()
+                active_block = MessageBlock(theme=theme_tokens)
             if active_block.type != "message":
                 active_block.end()
-                active_block = MessageBlock()
+                active_block = MessageBlock(theme=theme_tokens)
             active_block.message += chunk["content"]
 
         # Code
         if chunk["type"] == "code":
             if active_block is None:
-                active_block = CodeBlock()
+                active_block = CodeBlock(theme=theme_tokens)
             if active_block.type != "code" or ran_code_block:
                 # If the last block wasn't a code block,
                 # or it was, but we already ran it:
                 active_block.end()
-                active_block = CodeBlock()
+                active_block = CodeBlock(theme=theme_tokens)
             ran_code_block = False
             render_cursor = True
 
@@ -61,7 +63,7 @@ def render_past_conversation(messages):
             active_block.output = active_block.output.strip()  # <- Aesthetic choice
 
         if active_block:
-            active_block.refresh(cursor=render_cursor)
+            active_block.refresh(cursor=render_cursor, theme=theme_tokens)
 
     # (Sometimes -- like if they CTRL-C quickly -- active_block is still None here)
     if active_block:

@@ -12,6 +12,8 @@ from open_interpreter.core.ui import (
     local_setup,
     terminal_interface,
 )
+from open_interpreter.interfaces.terminal.components.theme_tokens import get_theme
+from open_interpreter.interfaces.terminal.strings import StringRegistry
 from open_interpreter.infrastructure.storage import OI_CONFIG_DIR, get_storage_path
 from open_interpreter.services import build_service_context
 
@@ -78,6 +80,8 @@ class OpenInterpreter:
         service_registry=None,
         service_overrides=None,
         message_renderer=None,
+        display_theme: str = "default",
+        ui_strings=None,
     ):
         # Ensure configuration required by service providers is in place before
         # we resolve the modular runtime context.
@@ -121,6 +125,11 @@ class OpenInterpreter:
         self.contribute_conversation = contribute_conversation
         self.plain_text_display = plain_text_display
         self.highlight_active_line = True  # additional setting to toggle active line highlighting. Defaults to True
+        try:
+            self.display_theme = get_theme(display_theme).name
+        except KeyError:
+            self.display_theme = get_theme("default").name
+        self.ui_strings = StringRegistry(ui_strings)
 
         # Loop messages
         self.loop = loop

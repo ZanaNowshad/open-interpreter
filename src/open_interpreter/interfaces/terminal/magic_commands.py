@@ -4,10 +4,13 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from ..core.utils.system_debug_info import system_info
+from .components.theme_tokens import available_themes, get_theme
 from .utils.count_tokens import count_messages_tokens
 from .utils.export_to_markdown import export_to_markdown
+from .utils.transcript import export_transcript
 
 
 def handle_undo(self, arguments):
@@ -48,28 +51,32 @@ def handle_undo(self, arguments):
 
 def handle_help(self, arguments):
     commands_description = {
-        "%% [commands]": "Run commands in system shell",
-        "%verbose [true/false]": "Toggle verbose mode. Without arguments or with 'true', it enters verbose mode. With 'false', it exits verbose mode.",
-        "%reset": "Resets the current session.",
-        "%undo": "Remove previous messages and its response from the message history.",
-        "%save_message [path]": "Saves messages to a specified JSON path. If no path is provided, it defaults to 'messages.json'.",
-        "%load_message [path]": "Loads messages from a specified JSON path. If no path is provided, it defaults to 'messages.json'.",
-        "%tokens [prompt]": "EXPERIMENTAL: Calculate the tokens used by the next request based on the current conversation's messages and estimate the cost of that request; optionally provide a prompt to also calculate the tokens used by that prompt and the total amount of tokens that will be sent with the next request",
-        "%help": "Show this help message.",
-        "%info": "Show system and interpreter information",
-        "%jupyter": "Export the conversation to a Jupyter notebook file",
-        "%markdown [path]": "Export the conversation to a specified Markdown path. If no path is provided, it will be saved to the Downloads folder with a generated conversation name.",
+        "%% [commands]": "help_command_shell",
+        "%verbose [true/false]": "help_command_verbose",
+        "%auto_run [true/false]": "help_command_auto_run",
+        "%debug [true/false]": "help_command_debug",
+        "%reset": "help_command_reset",
+        "%undo": "help_command_undo",
+        "%save_message [path]": "help_command_save",
+        "%load_message [path]": "help_command_load",
+        "%tokens [prompt]": "help_command_tokens",
+        "%help": "help_command_help",
+        "%info": "help_command_info",
+        "%jupyter": "help_command_jupyter",
+        "%markdown [path]": "help_command_markdown",
+        "%theme [name]": "help_command_theme",
+        "%transcript [path]": "help_command_transcript",
     }
 
-    base_message = ["> **Available Commands:**\n\n"]
+    base_message = [self.ui_strings.get("help_intro")]
 
     # Add each command and its description to the message
     for cmd, desc in commands_description.items():
-        base_message.append(f"- `{cmd}`: {desc}\n")
+        base_message.append(
+            f"- `{cmd}`: {self.ui_strings.get(desc)}\n"
+        )
 
-    additional_info = [
-        "\n\nFor further assistance, please join our community Discord or consider contributing to the project's development."
-    ]
+    additional_info = [self.ui_strings.get("help_footer")]
 
     # Combine the base message with the additional info
     full_message = base_message + additional_info
@@ -132,6 +139,51 @@ def handle_auto_run(self, arguments=None):
         self.auto_run = False
     else:
         self.display_message("> Unknown argument to auto_run command.")
+
+
+def handle_theme(self, arguments: str) -> None:
+    available = ", ".join(sorted(available_themes()))
+    theme_name = arguments.strip().lower()
+
+    if theme_name == "":
+        self.display_message(self.ui_strings.get("theme_available", available=available))
+        return
+
+    try:
+        resolved = get_theme(theme_name)
+    except KeyError:
+        self.display_message(
+            self.ui_strings.get("theme_invalid", theme=theme_name, available=available)
+        )
+        return
+
+    self.display_theme = resolved.name
+    self.display_message(self.ui_strings.get("theme_changed", theme=resolved.name))
+
+
+def handle_transcript(self, export_path: str) -> None:
+    if len(self.messages) == 0:
+        self.display_message(self.ui_strings.get("transcript_empty"))
+        return
+
+    base_name = (
+        Path(self.conversation_filename).stem
+        if getattr(self, "conversation_filename", None)
+        else f"conversation-{int(time.time())}"
+    )
+
+    destination = Path(export_path) if export_path else Path(get_downloads_path()) / f"{base_name}-transcript"
+
+    try:
+        resolved = export_transcript(self.messages, destination, self.ui_strings)
+    except OSError as exc:
+        self.display_message(
+            self.ui_strings.get("transcript_export_failure", reason=str(exc))
+        )
+    else:
+        self.display_message(
+            self.ui_strings.get("transcript_export_success", path=str(resolved.resolve()))
+        )
 
 
 def handle_info(self, arguments):
@@ -332,6 +384,8 @@ def handle_magic_command(self, user_input):
         "info": handle_info,
         "jupyter": jupyter,
         "markdown": markdown,
+        "theme": handle_theme,
+        "transcript": handle_transcript,
     }
 
     user_input = user_input[1:].strip()  # Capture the part after the `%`
