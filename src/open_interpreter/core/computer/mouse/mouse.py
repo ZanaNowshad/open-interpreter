@@ -26,6 +26,12 @@ class Mouse:
         Scrolls the mouse wheel up or down the specified number of clicks.
         """
         pyautogui.scroll(clicks)
+        direction = "up" if clicks > 0 else "down"
+        self.computer.emit_automation_event(
+            "computer.mouse.scroll",
+            f"Scrolling {direction} {abs(clicks)} clicks",
+            metadata={"clicks": clicks},
+        )
 
     def position(self):
         """
@@ -41,10 +47,42 @@ class Mouse:
                 f"An error occurred while retrieving the mouse position: {e}. "
             )
 
+    def _summarize(self, value, limit=60):
+        if value is None:
+            return None
+        summary = str(value).strip()
+        if len(summary) > limit:
+            summary = summary[: limit - 3] + "..."
+        return summary
+
+    def _extract_target(self, args, kwargs):
+        if "text" in kwargs and kwargs["text"] is not None:
+            return "text", kwargs["text"]
+        if "icon" in kwargs and kwargs["icon"] is not None:
+            return "icon", kwargs["icon"]
+        if "x" in kwargs and "y" in kwargs:
+            return "coordinates", (kwargs["x"], kwargs["y"])
+        if len(args) == 1 and isinstance(args[0], str):
+            return "text", args[0]
+        return None, None
+
+    def _build_mouse_description(self, verb, target_type, target_value):
+        if target_type == "text":
+            return f"{verb} text '{self._summarize(target_value)}'"
+        if target_type == "icon":
+            return f"{verb} icon '{self._summarize(target_value)}'"
+        if target_type == "coordinates" and isinstance(target_value, tuple):
+            x, y = target_value
+            return f"{verb} coordinates ({int(x)}, {int(y)})"
+        return verb
+
     def move(self, *args, x=None, y=None, icon=None, text=None, screenshot=None):
         """
         Moves the mouse to specified coordinates, an icon, or text.
         """
+        target_type = None
+        target_value = None
+
         if len(args) > 1:
             raise ValueError(
                 "Too many positional arguments provided. To move/click specific coordinates, use kwargs (x=x, y=y).\n\nPlease take a screenshot with computer.display.view() to find text/icons to click, then use computer.mouse.click(text) or computer.mouse.click(icon=description_of_icon) if at all possible. This is **significantly** more accurate than using coordinates. Specifying (x=x, y=y) is highly likely to fail. Specifying ('text to click') is highly likely to succeed."
@@ -59,6 +97,9 @@ class Mouse:
             coordinates = self.computer.display.find(
                 '"' + text + '"', screenshot=screenshot
             )
+
+            target_type = "text"
+            target_value = text
 
             is_fuzzy = any([c["similarity"] != 1 for c in coordinates])
             # nah just hey, if it's fuzzy, then whatever, it prob wont see the message then decide something else (not really smart enough yet usually)
@@ -142,11 +183,16 @@ class Mouse:
                     "assistant",
                 )
             )
+            target_type = "coordinates"
+            target_value = (x, y)
         elif icon is not None:
             if screenshot == None:
                 screenshot = self.computer.display.screenshot(show=False)
 
             coordinates = self.computer.display.find(icon.strip('"'), screenshot)
+
+            target_type = "icon"
+            target_value = icon
 
             if len(coordinates) > 1:
                 if self.computer.emit_images:
@@ -227,49 +273,116 @@ class Mouse:
         # pyautogui.moveTo(x, y, duration=0.5)
         smooth_move_to(x, y)
 
+        description = self._build_mouse_description(
+            "Moving mouse to", target_type, target_value
+        )
+        metadata = {"x": x, "y": y}
+        if target_type:
+            metadata.update({"target_type": target_type, "target": target_value})
+
+        self.computer.emit_automation_event(
+            "computer.mouse.move",
+            description,
+            metadata=metadata,
+        )
+
     def click(self, *args, button="left", clicks=1, interval=0.1, **kwargs):
         """
         Clicks the mouse at the specified coordinates, icon, or text.
         """
+        target_type, target_value = self._extract_target(args, kwargs)
         if args or kwargs:
             self.move(*args, **kwargs)
         pyautogui.click(button=button, clicks=clicks, interval=interval)
+        description = self._build_mouse_description(
+            f"Clicking {button} button", target_type, target_value
+        )
+        metadata = {"button": button, "clicks": clicks}
+        if target_type:
+            metadata.update({"target_type": target_type, "target": target_value})
+        self.computer.emit_automation_event(
+            "computer.mouse.click",
+            description,
+            metadata=metadata,
+        )
 
     def double_click(self, *args, button="left", interval=0.1, **kwargs):
         """
         Double-clicks the mouse at the specified coordinates, icon, or text.
         """
+        target_type, target_value = self._extract_target(args, kwargs)
         if args or kwargs:
             self.move(*args, **kwargs)
         pyautogui.doubleClick(button=button, interval=interval)
+        description = self._build_mouse_description(
+            f"Double-clicking {button} button", target_type, target_value
+        )
+        metadata = {"button": button}
+        if target_type:
+            metadata.update({"target_type": target_type, "target": target_value})
+        self.computer.emit_automation_event(
+            "computer.mouse.double_click",
+            description,
+            metadata=metadata,
+        )
 
     def triple_click(self, *args, button="left", interval=0.1, **kwargs):
         """
         Triple-clicks the mouse at the specified coordinates, icon, or text.
         """
+        target_type, target_value = self._extract_target(args, kwargs)
         if args or kwargs:
             self.move(*args, **kwargs)
         pyautogui.tripleClick(button=button, interval=interval)
+        description = self._build_mouse_description(
+            f"Triple-clicking {button} button", target_type, target_value
+        )
+        metadata = {"button": button}
+        if target_type:
+            metadata.update({"target_type": target_type, "target": target_value})
+        self.computer.emit_automation_event(
+            "computer.mouse.triple_click",
+            description,
+            metadata=metadata,
+        )
 
     def right_click(self, *args, **kwargs):
         """
         Right-clicks the mouse at the specified coordinates, icon, or text.
         """
+        target_type, target_value = self._extract_target(args, kwargs)
         if args or kwargs:
             self.move(*args, **kwargs)
         pyautogui.rightClick()
+        description = self._build_mouse_description(
+            "Right-clicking", target_type, target_value
+        )
+        metadata = {}
+        if target_type:
+            metadata.update({"target_type": target_type, "target": target_value})
+        self.computer.emit_automation_event(
+            "computer.mouse.right_click",
+            description,
+            metadata=metadata or None,
+        )
 
     def down(self):
         """
         Presses the mouse button down.
         """
         pyautogui.mouseDown()
+        self.computer.emit_automation_event(
+            "computer.mouse.down", "Pressing mouse button down"
+        )
 
     def up(self):
         """
         Releases the mouse button.
         """
         pyautogui.mouseUp()
+        self.computer.emit_automation_event(
+            "computer.mouse.up", "Releasing mouse button"
+        )
 
 
 import math

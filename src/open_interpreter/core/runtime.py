@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, Deque, Dict, Optional
 
 from open_interpreter.core.conversation.defaults import default_system_message
 from open_interpreter.core.execution.truncate_output import truncate_output
@@ -14,6 +17,48 @@ from open_interpreter.core.ui import (
 )
 from open_interpreter.infrastructure.storage import OI_CONFIG_DIR, get_storage_path
 from open_interpreter.services import build_service_context
+
+
+@dataclass
+class TTSSettings:
+    """Runtime configuration for text-to-speech playback."""
+
+    enabled: bool = False
+    engine: Optional[str] = None
+    voice: Optional[str] = None
+    voice_path: Optional[str] = None
+    speaker: Optional[str] = None
+    playback_rate: float = 1.0
+    binary: Optional[str] = None
+    extra_args: Dict[str, Any] = field(default_factory=dict)
+
+    def update(self, data: Dict[str, Any]) -> None:
+        """Merge new configuration values into the settings."""
+
+        for key, value in data.items():
+            if key == "extra_args" and isinstance(value, dict):
+                self.extra_args.update(value)
+            elif hasattr(self, key):
+                setattr(self, key, value)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialise settings into a dictionary for persistence."""
+
+        payload: Dict[str, Any] = {
+            "enabled": self.enabled,
+            "engine": self.engine,
+            "voice": self.voice,
+            "voice_path": self.voice_path,
+            "speaker": self.speaker,
+            "playback_rate": self.playback_rate,
+            "binary": self.binary,
+        }
+
+        if self.extra_args:
+            payload["extra_args"] = self.extra_args
+
+        # Drop None values to keep preference files concise
+        return {k: v for k, v in payload.items() if v is not None}
 
 
 class OpenInterpreter:
@@ -135,6 +180,7 @@ class OpenInterpreter:
         # OS control mode related attributes
         self.os = os
         self.speak_messages = speak_messages
+        self.tts = TTSSettings(enabled=speak_messages)
 
         # Computer
         self.computer = self.runtime.computer
@@ -158,6 +204,9 @@ class OpenInterpreter:
         self.code_output_template = code_output_template
         self.empty_code_output_template = empty_code_output_template
         self.code_output_sender = code_output_sender
+
+        # Automation events emitted by computer actions
+        self._automation_events: Deque[Dict[str, Any]] = deque()
 
     @property
     def messages(self):
@@ -198,6 +247,39 @@ class OpenInterpreter:
     @property
     def anonymous_telemetry(self) -> bool:
         return not self.disable_telemetry and not self.offline
+
+    # ---------------------------------------------------------------------
+    # Automation event helpers
+
+    def log_automation_event(
+        self,
+        title: str,
+        description: str,
+        *,
+        action: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record an automation event for downstream interfaces."""
+
+        payload: Dict[str, Any] = {
+            "title": title,
+            "description": description,
+            "timestamp": time.time(),
+        }
+
+        if action:
+            payload["action"] = action
+        if metadata:
+            payload["metadata"] = metadata
+
+        self._automation_events.append(payload)
+
+    def consume_automation_events(self) -> list[Dict[str, Any]]:
+        """Return and clear any queued automation events."""
+
+        events = list(self._automation_events)
+        self._automation_events.clear()
+        return events
 
     @property
     def will_contribute(self):
