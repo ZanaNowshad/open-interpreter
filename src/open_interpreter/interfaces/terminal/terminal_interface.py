@@ -21,11 +21,16 @@ from ..core.utils.system_debug_info import system_info
 from ..core.utils.truncate_output import truncate_output
 from .components.code_block import CodeBlock
 from .components.message_block import MessageBlock
+from .components.thinking_indicator import ThinkingIndicator
 from .magic_commands import handle_magic_command
 from .utils.check_for_package import check_for_package
 from .utils.cli_input import cli_input
+from .utils.cheat_sheet import show_cheat_sheet
 from .utils.display_output import display_output
 from .utils.find_image_path import find_image_path
+from .utils.feedback import FeedbackEmitter
+from .utils.interaction_history import SessionHistory
+from .utils.shortcut_registry import resolve_contexts
 
 # Add examples to the readline history
 examples = [
@@ -80,6 +85,32 @@ def terminal_interface(interpreter, message):
     active_block = None
     voice_subprocess = None
 
+    history = getattr(interpreter, "_history", None)
+    if history is None:
+        history = SessionHistory()
+        interpreter._history = history
+
+    feedback = FeedbackEmitter(interpreter)
+    indicator = None if interpreter.plain_text_display else ThinkingIndicator()
+
+    def read_with_shortcuts(prompt: str, context: str) -> str:
+        while True:
+            response = input(prompt)
+            if response == "\x1f":
+                show_cheat_sheet(resolve_contexts(interpreter, context))
+                continue
+            if response == "\x19":
+                action = history.redo(interpreter)
+                if action:
+                    interpreter.display_message(
+                        f"> Redid {action.description}"
+                    )
+                    feedback.emit(action.severity)
+                else:
+                    interpreter.display_message("> Nothing to redo.")
+                continue
+            return response
+
     while True:
         if interactive:
             if (
@@ -93,15 +124,32 @@ def terminal_interface(interpreter, message):
             else:
                 ### This is the primary input for Open Interpreter.
                 try:
-                    message = (
-                        cli_input("> ").strip()
-                        if interpreter.multi_line
-                        else input("> ").strip()
-                    )
+                    if interpreter.multi_line:
+                        raw_input = cli_input("> ")
+                    else:
+                        raw_input = input("> ")
                 except (KeyboardInterrupt, EOFError):
                     # Treat Ctrl-D on an empty line the same as Ctrl-C by exiting gracefully
                     interpreter.display_message("\n\n`Exiting...`")
                     raise KeyboardInterrupt
+
+                if raw_input == "\x1f":
+                    contexts = resolve_contexts(interpreter, "input")
+                    show_cheat_sheet(contexts)
+                    continue
+
+                if raw_input == "\x19":
+                    action = history.redo(interpreter)
+                    if action:
+                        interpreter.display_message(
+                            f"> Redid {action.description}"
+                        )
+                        feedback.emit(action.severity)
+                    else:
+                        interpreter.display_message("> Nothing to redo.")
+                    continue
+
+                message = raw_input.strip()
 
             try:
                 # This lets users hit the up arrow key for past messages
@@ -159,6 +207,9 @@ def terminal_interface(interpreter, message):
                     }
 
         try:
+            pending_approval_before = None
+            if indicator:
+                indicator.start("Thinking…")
             for chunk in interpreter.chat(message, display=False, stream=True):
                 yield chunk
 
@@ -168,6 +219,19 @@ def terminal_interface(interpreter, message):
 
                 if interpreter.verbose:
                     print("Chunk in `terminal_interface`:", chunk)
+
+                if indicator:
+                    if chunk["type"] == "confirmation":
+                        indicator.update_label("Awaiting approval…")
+                    elif chunk["type"] == "message" and "start" in chunk:
+                        indicator.update_label("Typing…")
+                    elif chunk["type"] == "code" and "start" in chunk:
+                        language_hint = chunk.get("format", "code")
+                        indicator.update_label(f"Drafting {language_hint}…")
+                    elif chunk["type"] == "console":
+                        indicator.update_label("Running code…")
+                    elif "end" in chunk and chunk["type"] in {"message", "code"}:
+                        indicator.update_label("Finishing up…")
 
                 # Comply with PyAutoGUI fail-safe for OS mode
                 # so people can turn it off by moving their mouse to a corner
@@ -185,6 +249,7 @@ def terminal_interface(interpreter, message):
 
                 # Execution notice
                 if chunk["type"] == "confirmation":
+                    pending_approval_before = interpreter.messages
                     if not interpreter.auto_run:
                         # OI is about to execute code. The user wants to approve this
 
@@ -204,8 +269,9 @@ def terminal_interface(interpreter, message):
                             if interpreter.safe_mode == "auto":
                                 should_scan_code = True
                             elif interpreter.safe_mode == "ask":
-                                response = input(
-                                    "  Would you like to scan this code? (y/n)\n\n  "
+                                response = read_with_shortcuts(
+                                    "  Would you like to scan this code? (y/n)\n\n  ",
+                                    "approval",
                                 )
                                 print("")  # <- Aesthetic choice
 
@@ -216,12 +282,14 @@ def terminal_interface(interpreter, message):
                             scan_code(code, language, interpreter)
 
                         if interpreter.plain_text_display:
-                            response = input(
-                                "Would you like to run this code? (y/n)\n\n"
+                            response = read_with_shortcuts(
+                                "Would you like to run this code? (y/n)\n\n",
+                                "approval",
                             )
                         else:
-                            response = input(
-                                "  Would you like to run this code? (y/n)\n\n  "
+                            response = read_with_shortcuts(
+                                "  Would you like to run this code? (y/n)\n\n  ",
+                                "approval",
                             )
                         print("")  # <- Aesthetic choice
 
@@ -232,6 +300,20 @@ def terminal_interface(interpreter, message):
                             active_block.margin_top = False  # <- Aesthetic choice
                             active_block.language = language
                             active_block.code = code
+                            if history:
+                                before_snapshot = (
+                                    pending_approval_before or interpreter.messages
+                                )
+                                action = history.record_action(
+                                    action_type="approval",
+                                    description=f"Approved {language} execution",
+                                    before=before_snapshot,
+                                    after=interpreter.messages,
+                                    severity="info",
+                                    allow_future_updates=True,
+                                )
+                                feedback.emit(action.severity)
+                            pending_approval_before = None
                         elif response.strip().lower() == "e":
                             # Edit
 
@@ -249,6 +331,8 @@ def terminal_interface(interpreter, message):
                             with open(tf.name, "r") as tf:
                                 code = tf.read()
 
+                            edit_before = interpreter.messages if history else None
+
                             interpreter.messages[-1]["content"] = code  # Give it code
 
                             # Delete the temporary file
@@ -257,6 +341,14 @@ def terminal_interface(interpreter, message):
                             active_block.margin_top = False  # <- Aesthetic choice
                             active_block.language = language
                             active_block.code = code
+                            if history:
+                                action = history.record_action(
+                                    action_type="edit",
+                                    description=f"Edited pending {language} code",
+                                    before=edit_before or interpreter.messages,
+                                    after=interpreter.messages,
+                                )
+                                feedback.emit(action.severity)
                         else:
                             # User declined to run code.
                             interpreter.messages.append(
@@ -266,6 +358,19 @@ def terminal_interface(interpreter, message):
                                     "content": "I have declined to run this code.",
                                 }
                             )
+                            if history:
+                                before_snapshot = (
+                                    pending_approval_before or interpreter.messages
+                                )
+                                action = history.record_action(
+                                    action_type="approval",
+                                    description=f"Declined {language} execution",
+                                    before=before_snapshot,
+                                    after=interpreter.messages,
+                                    severity="warning",
+                                )
+                                feedback.emit(action.severity)
+                            pending_approval_before = None
                             break
 
                 # Plain text mode
@@ -510,6 +615,8 @@ def terminal_interface(interpreter, message):
                                 active_block.end()
                             active_block = CodeBlock()
 
+                history.update_latest(interpreter.messages)
+
                 if active_block:
                     active_block.refresh(cursor=render_cursor)
 
@@ -539,3 +646,7 @@ def terminal_interface(interpreter, message):
             if interpreter.debug:
                 system_info(interpreter)
             raise
+        finally:
+            history.finalize_latest()
+            if indicator:
+                indicator.stop()

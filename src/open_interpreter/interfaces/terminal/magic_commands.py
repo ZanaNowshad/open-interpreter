@@ -8,9 +8,20 @@ from datetime import datetime
 from ..core.utils.system_debug_info import system_info
 from .utils.count_tokens import count_messages_tokens
 from .utils.export_to_markdown import export_to_markdown
+from .utils.feedback import FeedbackEmitter
 
 
 def handle_undo(self, arguments):
+    history = getattr(self, "_history", None)
+    if history and history.has_undo:
+        action = history.undo(self)
+        if action:
+            FeedbackEmitter(self).emit(action.severity)
+            self.display_message(f"> Undid {action.description}")
+        else:
+            self.display_message("> Nothing to undo.")
+        return
+
     # Removes all messages after the most recent user entry (and the entry itself).
     # Therefore user can jump back to the latest point of conversation.
     # Also gives a visual representation of the messages removed.
@@ -51,7 +62,8 @@ def handle_help(self, arguments):
         "%% [commands]": "Run commands in system shell",
         "%verbose [true/false]": "Toggle verbose mode. Without arguments or with 'true', it enters verbose mode. With 'false', it exits verbose mode.",
         "%reset": "Resets the current session.",
-        "%undo": "Remove previous messages and its response from the message history.",
+        "%undo": "Undo the last approval, edit, or conversation step.",
+        "%redo": "Redo the last undone approval or edit.",
         "%save_message [path]": "Saves messages to a specified JSON path. If no path is provided, it defaults to 'messages.json'.",
         "%load_message [path]": "Loads messages from a specified JSON path. If no path is provided, it defaults to 'messages.json'.",
         "%tokens [prompt]": "EXPERIMENTAL: Calculate the tokens used by the next request based on the current conversation's messages and estimate the cost of that request; optionally provide a prompt to also calculate the tokens used by that prompt and the total amount of tokens that will be sent with the next request",
@@ -168,6 +180,19 @@ def handle_load_message(self, json_path):
         self.messages = json.load(f)
 
     self.display_message(f"> messages json loaded from {os.path.abspath(json_path)}")
+
+
+def handle_redo(self, arguments):
+    history = getattr(self, "_history", None)
+    if history and history.has_redo:
+        action = history.redo(self)
+        if action:
+            FeedbackEmitter(self).emit(action.severity)
+            self.display_message(f"> Redid {action.description}")
+        else:
+            self.display_message("> Nothing to redo.")
+    else:
+        self.display_message("> Nothing to redo.")
 
 
 def handle_count_tokens(self, prompt):
@@ -328,6 +353,7 @@ def handle_magic_command(self, user_input):
         "save_message": handle_save_message,
         "load_message": handle_load_message,
         "undo": handle_undo,
+        "redo": handle_redo,
         "tokens": handle_count_tokens,
         "info": handle_info,
         "jupyter": jupyter,
