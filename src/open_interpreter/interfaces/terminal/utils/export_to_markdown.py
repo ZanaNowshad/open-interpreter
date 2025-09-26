@@ -1,8 +1,12 @@
-def export_to_markdown(messages: list[dict], export_path: str):
+def export_to_markdown(
+    messages: list[dict], export_path: str, *, announce: bool = True
+) -> str:
     markdown = messages_to_markdown(messages)
     with open(export_path, 'w') as f:
         f.write(markdown)
-    print(f"Exported current conversation to {export_path}")
+    if announce:
+        print(f"Exported current conversation to {export_path}")
+    return export_path
 
 
 def messages_to_markdown(messages: list[dict]) -> str:
