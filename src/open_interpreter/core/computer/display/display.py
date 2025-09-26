@@ -118,6 +118,22 @@ class Display:
         :param combine_screens: If True, a collage of all display screens will be returned. Otherwise, a list of display screens will be returned.
         """
 
+        description = (
+            "Capturing active application"
+            if active_app_only and quadrant is None
+            else "Capturing screen"
+        )
+        self.computer.emit_automation_event(
+            "computer.display.screenshot",
+            description,
+            metadata={
+                "screen": screen,
+                "quadrant": quadrant,
+                "active_app_only": active_app_only,
+                "combine_screens": combine_screens,
+            },
+        )
+
         # Since Local II, all images sent to local models will be rendered to text with moondream and pytesseract.
         # So we don't need to do this here— we can just emit images.
         # We should probably remove self.computer.emit_images for this reason.

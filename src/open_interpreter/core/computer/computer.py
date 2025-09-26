@@ -1,5 +1,6 @@
 import inspect
 import json
+from typing import Any, Dict, Optional
 
 from open_interpreter.capabilities import capability_registry
 
@@ -117,6 +118,40 @@ Do not import the computer module, or any of its sub-modules. They are already i
                 provider=tool,
                 description=description,
             )
+
+    def emit_automation_event(
+        self,
+        action: str,
+        description: str,
+        *,
+        title: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Forward structured automation events to the interpreter."""
+
+        interpreter = getattr(self, "interpreter", None)
+        if not interpreter or not hasattr(interpreter, "log_automation_event"):
+            return
+
+        event_title = title or action.replace(".", " ").title()
+
+        # Ensure metadata is JSON-serialisable where possible
+        safe_metadata: Optional[Dict[str, Any]] = None
+        if metadata:
+            safe_metadata = {}
+            for key, value in metadata.items():
+                try:
+                    json.dumps(value)
+                    safe_metadata[key] = value
+                except (TypeError, ValueError):
+                    safe_metadata[key] = str(value)
+
+        interpreter.log_automation_event(
+            event_title,
+            description,
+            action=action,
+            metadata=safe_metadata,
+        )
 
     def _get_all_computer_tools_signature_and_description(self):
         """

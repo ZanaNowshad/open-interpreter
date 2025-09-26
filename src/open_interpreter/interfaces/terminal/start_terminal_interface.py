@@ -13,6 +13,7 @@ from open_interpreter.interfaces.terminal.contributing_conversations import (
 from .conversation_navigator import conversation_navigator
 from .profiles.profiles import open_storage_dir, profile, reset_profile
 from .utils.check_for_update import check_for_update
+from .utils.preferences import load_preferences, update_preferences
 from .validate_llm_settings import validate_llm_settings
 
 
@@ -394,6 +395,12 @@ Use """ to write multi-line messages.
         )
         sys.exit(1)
 
+    preferences = load_preferences()
+    tts_preferences = preferences.get("tts") if isinstance(preferences, dict) else None
+    if tts_preferences:
+        interpreter.tts.update(tts_preferences)
+        interpreter.speak_messages = interpreter.tts.enabled
+
     if args.profiles:
         open_storage_dir("profiles")
         return
@@ -426,6 +433,7 @@ Use """ to write multi-line messages.
     ### Set attributes on interpreter, so that a profile script can read the arguments passed in via the CLI
 
     set_attributes(args, arguments)
+    interpreter.tts.enabled = interpreter.speak_messages
 
     ### Apply profile
 
@@ -473,13 +481,18 @@ Use """ to write multi-line messages.
         args.profile or get_argument_dictionary(arguments, "profile")["default"],
     )
 
+    interpreter.speak_messages = interpreter.tts.enabled
+
     ### Set attributes on interpreter, because the arguments passed in via the CLI should override profile
 
     set_attributes(args, arguments)
+    interpreter.tts.enabled = interpreter.speak_messages
     interpreter.disable_telemetry = (
         os.getenv("DISABLE_TELEMETRY", "false").lower() == "true"
         or args.disable_telemetry
     )
+
+    update_preferences("tts", interpreter.tts.to_dict())
 
     ### Set some helpful settings we know are likely to be true
 

@@ -14,10 +14,19 @@ class Keyboard:
     def __init__(self, computer):
         self.computer = computer
 
+    def _summarize(self, text, limit=60):
+        if text is None:
+            return None
+        summary = str(text).strip()
+        if len(summary) > limit:
+            summary = summary[: limit - 3] + "..."
+        return summary
+
     def write(self, text, interval=None, delay=0.30, **kwargs):
         """
         Type out a string of characters with some realistic delay.
         """
+        original_text = text
         time.sleep(delay / 2)
 
         if interval:
@@ -56,6 +65,14 @@ class Keyboard:
 
         time.sleep(delay / 2)
 
+        description = f"Typing '{self._summarize(original_text)}'"
+        metadata = {"interval": interval, "delay": delay}
+        self.computer.emit_automation_event(
+            "computer.keyboard.write",
+            description,
+            metadata=metadata,
+        )
+
     def press(self, *args, presses=1, interval=0.1):
         keys = args
         """
@@ -67,6 +84,17 @@ class Keyboard:
         time.sleep(0.15)
         pyautogui.press(keys, presses=presses, interval=interval)
         time.sleep(0.15)
+        summary = (
+            ", ".join(str(k) for k in keys)
+            if isinstance(keys, (list, tuple))
+            else str(keys)
+        )
+        description = f"Pressing {self._summarize(summary)}"
+        self.computer.emit_automation_event(
+            "computer.keyboard.press",
+            description,
+            metadata={"keys": keys, "presses": presses},
+        )
 
     def press_and_release(self, *args, presses=1, interval=0.1):
         """
@@ -113,6 +141,12 @@ class Keyboard:
         else:
             pyautogui.hotkey(*args, interval=interval)
         time.sleep(0.15)
+        combo = " + ".join(str(arg) for arg in args)
+        self.computer.emit_automation_event(
+            "computer.keyboard.hotkey",
+            f"Pressing hotkey {self._summarize(combo)}",
+            metadata={"keys": list(args)},
+        )
 
     def down(self, key):
         """
@@ -121,6 +155,11 @@ class Keyboard:
         time.sleep(0.15)
         pyautogui.keyDown(key)
         time.sleep(0.15)
+        self.computer.emit_automation_event(
+            "computer.keyboard.down",
+            f"Key down {self._summarize(key)}",
+            metadata={"key": key},
+        )
 
     def up(self, key):
         """
@@ -129,3 +168,8 @@ class Keyboard:
         time.sleep(0.15)
         pyautogui.keyUp(key)
         time.sleep(0.15)
+        self.computer.emit_automation_event(
+            "computer.keyboard.up",
+            f"Key up {self._summarize(key)}",
+            metadata={"key": key},
+        )

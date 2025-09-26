@@ -26,6 +26,20 @@ from .utils.check_for_package import check_for_package
 from .utils.cli_input import cli_input
 from .utils.display_output import display_output
 from .utils.find_image_path import find_image_path
+from .utils.notifier import Notifier
+from .utils.tts import TTSPlaybackHandle, TTSUnavailable, speak_text
+
+
+NOTIFIER = Notifier()
+
+
+def _sanitize_notification_message(message: str) -> str:
+    sanitized = message.replace("\\", "\\\\").replace("\n", " ")
+    sanitized = sanitized.replace("\r", " ")
+    sanitized = sanitized.replace('"', "'")
+    while "  " in sanitized:
+        sanitized = sanitized.replace("  ", " ")
+    return sanitized.strip()
 
 # Add examples to the readline history
 examples = [
@@ -78,7 +92,7 @@ def terminal_interface(interpreter, message):
         interactive = True
 
     active_block = None
-    voice_subprocess = None
+    voice_playback: TTSPlaybackHandle | None = None
 
     while True:
         if interactive:
@@ -300,14 +314,13 @@ def terminal_interface(interpreter, message):
                     if "content" in chunk:
                         active_block.message += chunk["content"]
 
-                    if "end" in chunk and interpreter.os:
+                    if "end" in chunk:
                         last_message = interpreter.messages[-1]["content"]
 
-                        # Remove markdown lists and the line above markdown lists
+                        # Remove markdown lists and the line above markdown lists for notifications
                         lines = last_message.split("\n")
                         i = 0
                         while i < len(lines):
-                            # Match markdown lists starting with hyphen, asterisk or number
                             if re.match(r"^\s*([-*]|\d+\.)\s", lines[i]):
                                 del lines[i]
                                 if i > 0:
@@ -315,32 +328,21 @@ def terminal_interface(interpreter, message):
                                     i -= 1
                             else:
                                 i += 1
-                        message = "\n".join(lines)
-                        # Replace newlines with spaces, escape double quotes and backslashes
-                        sanitized_message = (
-                            message.replace("\\", "\\\\")
-                            .replace("\n", " ")
-                            .replace('"', '\\"')
-                        )
+                        sanitized_message = _sanitize_notification_message("\n".join(lines))
 
-                        # Display notification in OS mode
-                        interpreter.computer.os.notify(sanitized_message)
+                        if interpreter.os:
+                            NOTIFIER.notify(sanitized_message)
 
-                        # Speak message aloud
-                        if platform.system() == "Darwin" and interpreter.speak_messages:
-                            if voice_subprocess:
-                                voice_subprocess.terminate()
-                            voice_subprocess = subprocess.Popen(
-                                [
-                                    "osascript",
-                                    "-e",
-                                    f'say "{sanitized_message}" using "Fred"',
-                                ]
-                            )
-                        else:
-                            pass
-                            # User isn't on a Mac, so we can't do this. You should tell them something about that when they first set this up.
-                            # Or use a universal TTS library.
+                        if interpreter.tts.enabled:
+                            if voice_playback:
+                                voice_playback.stop()
+                                voice_playback = None
+                            try:
+                                voice_playback = speak_text(sanitized_message, interpreter.tts)
+                            except TTSUnavailable as exc:
+                                if interpreter.verbose:
+                                    print(f"TTS unavailable: {exc}")
+                                interpreter.tts.enabled = False
 
                 # Assistant code blocks
                 elif chunk["role"] == "assistant" and chunk["type"] == "code":
@@ -438,71 +440,6 @@ def terminal_interface(interpreter, message):
                     if "format" in chunk and chunk["format"] == "active_line":
                         active_block.active_line = chunk["content"]
 
-                        # Display action notifications if we're in OS mode
-                        if interpreter.os and active_block.active_line != None:
-                            action = ""
-
-                            code_lines = active_block.code.split("\n")
-                            if active_block.active_line < len(code_lines):
-                                action = code_lines[active_block.active_line].strip()
-
-                            if action.startswith("computer"):
-                                description = None
-
-                                # Extract arguments from the action
-                                start_index = action.find("(")
-                                end_index = action.rfind(")")
-                                if start_index != -1 and end_index != -1:
-                                    # (If we found both)
-                                    arguments = action[start_index + 1 : end_index]
-                                else:
-                                    arguments = None
-
-                                # NOTE: Do not put the text you're clicking on screen
-                                # (unless we figure out how to do this AFTER taking the screenshot)
-                                # otherwise it will try to click this notification!
-
-                                if any(
-                                    action.startswith(text)
-                                    for text in [
-                                        "computer.screenshot",
-                                        "computer.display.screenshot",
-                                        "computer.display.view",
-                                        "computer.view",
-                                    ]
-                                ):
-                                    description = "Viewing screen..."
-                                elif action == "computer.mouse.click()":
-                                    description = "Clicking..."
-                                elif action.startswith("computer.mouse.click("):
-                                    if "icon=" in arguments:
-                                        text_or_icon = "icon"
-                                    else:
-                                        text_or_icon = "text"
-                                    description = f"Clicking {text_or_icon}..."
-                                elif action.startswith("computer.mouse.move("):
-                                    if "icon=" in arguments:
-                                        text_or_icon = "icon"
-                                    else:
-                                        text_or_icon = "text"
-                                    if (
-                                        "click" in active_block.code
-                                    ):  # This could be better
-                                        description = f"Clicking {text_or_icon}..."
-                                    else:
-                                        description = f"Mousing over {text_or_icon}..."
-                                elif action.startswith("computer.keyboard.write("):
-                                    description = f"Typing {arguments}."
-                                elif action.startswith("computer.keyboard.hotkey("):
-                                    description = f"Pressing {arguments}."
-                                elif action.startswith("computer.keyboard.press("):
-                                    description = f"Pressing {arguments}."
-                                elif action == "computer.os.get_selected_text()":
-                                    description = f"Getting selected text."
-
-                                if description:
-                                    interpreter.computer.os.notify(description)
-
                     if "start" in chunk:
                         # We need to make a code block if we pushed out an HTML block first, which would have closed our code block.
                         if not isinstance(active_block, CodeBlock):
@@ -512,6 +449,14 @@ def terminal_interface(interpreter, message):
 
                 if active_block:
                     active_block.refresh(cursor=render_cursor)
+
+                events = interpreter.consume_automation_events()
+                if events:
+                    for event in events:
+                        title = event.get("title")
+                        description = event.get("description", "")
+                        if interpreter.os:
+                            NOTIFIER.notify(description, title=title)
 
             # (Sometimes -- like if they CTRL-C quickly -- active_block is still None here)
             if "active_block" in locals():

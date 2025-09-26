@@ -18,6 +18,9 @@ class Os:
         selected_text = self.computer.clipboard.view()
         # Reset the clipboard to its original content
         self.computer.clipboard.copy(current_clipboard)
+        self.computer.emit_automation_event(
+            "computer.os.get_selected_text", "Retrieving selected text"
+        )
         return selected_text
 
     def notify(self, text):
