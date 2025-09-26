@@ -10,6 +10,7 @@ from open_interpreter.interfaces.terminal.contributing_conversations import (
     contribute_conversations,
 )
 
+from .components.theme_tokens import available_themes
 from .conversation_navigator import conversation_navigator
 from .profiles.profiles import open_storage_dir, profile, reset_profile
 from .utils.check_for_update import check_for_update
@@ -63,6 +64,14 @@ def start_terminal_interface(interpreter):
             "type": bool,
             "action": "store_true",
             "default": False,  # Default to False, meaning highlighting is on by default
+        },
+        {
+            "name": "display_theme",
+            "help_text": "set the accessible theme (default, dyslexia, monochrome)",
+            "type": str,
+            "choices": sorted(available_themes()),
+            "default": "default",
+            "attribute": {"object": interpreter, "attr_name": "display_theme"},
         },
         {
             "name": "verbose",

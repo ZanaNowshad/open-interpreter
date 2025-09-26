@@ -190,7 +190,9 @@ def terminal_interface(interpreter, message):
 
                         # End the active code block so you can run input() below it
                         if active_block and not interpreter.plain_text_display:
-                            active_block.refresh(cursor=False)
+                            active_block.refresh(
+                                cursor=False, theme=interpreter.display_theme
+                            )
                             active_block.end()
                             active_block = None
 
@@ -228,7 +230,9 @@ def terminal_interface(interpreter, message):
                         if response.strip().lower() == "y":
                             # Create a new, identical block where the code will actually be run
                             # Conveniently, the chunk includes everything we need to do this:
-                            active_block = CodeBlock(interpreter)
+                            active_block = CodeBlock(
+                                interpreter, theme=interpreter.display_theme
+                            )
                             active_block.margin_top = False  # <- Aesthetic choice
                             active_block.language = language
                             active_block.code = code
@@ -253,7 +257,9 @@ def terminal_interface(interpreter, message):
 
                             # Delete the temporary file
                             os.unlink(tf.name)
-                            active_block = CodeBlock()
+                            active_block = CodeBlock(
+                                theme=interpreter.display_theme
+                            )
                             active_block.margin_top = False  # <- Aesthetic choice
                             active_block.language = language
                             active_block.code = code
@@ -282,7 +288,9 @@ def terminal_interface(interpreter, message):
                     continue
 
                 if "end" in chunk and active_block:
-                    active_block.refresh(cursor=False)
+                    active_block.refresh(
+                        cursor=False, theme=interpreter.display_theme
+                    )
 
                     if chunk["type"] in [
                         "message",
@@ -294,7 +302,9 @@ def terminal_interface(interpreter, message):
                 # Assistant message blocks
                 if chunk["type"] == "message":
                     if "start" in chunk:
-                        active_block = MessageBlock()
+                        active_block = MessageBlock(
+                            theme=interpreter.display_theme
+                        )
                         render_cursor = True
 
                     if "content" in chunk:
@@ -345,7 +355,9 @@ def terminal_interface(interpreter, message):
                 # Assistant code blocks
                 elif chunk["role"] == "assistant" and chunk["type"] == "code":
                     if "start" in chunk:
-                        active_block = CodeBlock()
+                        active_block = CodeBlock(
+                            theme=interpreter.display_theme
+                        )
                         active_block.language = chunk["format"]
                         render_cursor = True
 
@@ -508,10 +520,14 @@ def terminal_interface(interpreter, message):
                         if not isinstance(active_block, CodeBlock):
                             if active_block:
                                 active_block.end()
-                            active_block = CodeBlock()
+                            active_block = CodeBlock(
+                                theme=interpreter.display_theme
+                            )
 
                 if active_block:
-                    active_block.refresh(cursor=render_cursor)
+                    active_block.refresh(
+                        cursor=render_cursor, theme=interpreter.display_theme
+                    )
 
             # (Sometimes -- like if they CTRL-C quickly -- active_block is still None here)
             if "active_block" in locals():
