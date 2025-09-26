@@ -4,10 +4,118 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from typing import Callable, Optional, Sequence
+
+from rich.console import Console, Group
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.text import Text
 
 from ..core.utils.system_debug_info import system_info
 from .utils.count_tokens import count_messages_tokens
 from .utils.export_to_markdown import export_to_markdown
+
+
+console = Console()
+
+STATUS_META = {
+    "info": {"color": "cyan", "icon": "ℹ", "label": "Info"},
+    "success": {"color": "green", "icon": "✔", "label": "Success"},
+    "warning": {"color": "yellow", "icon": "⚠", "label": "Warning"},
+    "error": {"color": "red", "icon": "✖", "label": "Error"},
+}
+
+ACTION_STYLES = {
+    "open": "bold white on dark_green",
+    "copy path": "bold white on dark_cyan",
+    "export": "bold white on dark_magenta",
+}
+
+DEFAULT_ACTIONS = ("open", "copy path", "export")
+
+
+def _render_action_chips(actions: Sequence[str]) -> Text:
+    chips = Text()
+    for action in actions:
+        if chips:
+            chips.append(" ")
+        style = ACTION_STYLES.get(action.lower(), "bold white on grey37")
+        chip = Text(f" {action.title()} ", style=style)
+        chips.append_text(chip)
+    return chips
+
+
+def _display_magic_panel(
+    self,
+    body: str,
+    *,
+    status: str = "info",
+    path: Optional[str] = None,
+    actions: Optional[Sequence[str]] = None,
+) -> None:
+    meta = STATUS_META.get(status, STATUS_META["info"])
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    normalized_actions = tuple(actions or ())
+
+    if getattr(self, "plain_text_display", False):
+        plain_lines = [f"[{meta['label']}] {body.strip()}"]
+        plain_lines.append(f"Timestamp: {timestamp}")
+        if path:
+            plain_lines.append(f"Path: {path}")
+        if normalized_actions:
+            plain_lines.append("Actions: " + " | ".join(action.title() for action in normalized_actions))
+        self.display_message("\n".join(plain_lines))
+        return
+
+    content_parts = []
+    if body:
+        content_parts.append(Markdown(body))
+    if path:
+        path_text = Text.assemble(("Path: ", "bold"), (path, "cyan"))
+        content_parts.append(path_text)
+    if normalized_actions:
+        content_parts.append(_render_action_chips(normalized_actions))
+
+    if not content_parts:
+        content_parts.append(Text(""))
+
+    panel = Panel(
+        Group(*content_parts),
+        title=f"[{meta['color']}]{meta['icon']} {meta['label']}[/]",
+        subtitle=f"[dim]{timestamp}[/]",
+        border_style=meta["color"],
+    )
+    console.print(panel)
+
+
+def _run_export_with_progress(
+    self,
+    description: str,
+    total_steps: int,
+    worker: Callable[[Optional[Progress], Optional[int]], int],
+) -> int:
+    if getattr(self, "plain_text_display", False) or total_steps <= 0:
+        return worker(None, None)
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TimeElapsedColumn(),
+        transient=True,
+        console=console,
+    )
+
+    with progress as progress_display:
+        task_id = progress_display.add_task(description, total=total_steps)
+        return worker(progress_display, task_id)
 
 
 def handle_undo(self, arguments):
@@ -30,56 +138,71 @@ def handle_undo(self, arguments):
         removed_messages = self.messages[last_user_index:]
         self.messages = self.messages[:last_user_index]
 
-    print("")  # Aesthetics.
+    if not removed_messages:
+        _display_magic_panel(
+            self,
+            "No user messages were available to undo.",
+            status="warning",
+        )
+        return
 
-    # Print out a preview of what messages were removed.
+    removed_lines = []
     for message in removed_messages:
-        if "content" in message and message["content"] != None:
-            self.display_message(
-                f"**Removed message:** `\"{message['content'][:30]}...\"`"
+        if "content" in message and message["content"] is not None:
+            removed_lines.append(
+                f"- Removed message: `\"{message['content'][:30]}...\"`"
             )
         elif "function_call" in message:
-            self.display_message(
-                f"**Removed codeblock**"
-            )  # TODO: Could add preview of code removed here.
+            removed_lines.append("- Removed code block")
 
-    print("")  # Aesthetics.
+    body = "\n".join(removed_lines)
+    _display_magic_panel(
+        self,
+        body or "Previous exchange removed from history.",
+        status="warning",
+    )
 
 
 def handle_help(self, arguments):
     commands_description = {
-        "%% [commands]": "Run commands in system shell",
+        "%% [commands]": "Run commands in system shell.",
         "%verbose [true/false]": "Toggle verbose mode. Without arguments or with 'true', it enters verbose mode. With 'false', it exits verbose mode.",
-        "%reset": "Resets the current session.",
-        "%undo": "Remove previous messages and its response from the message history.",
-        "%save_message [path]": "Saves messages to a specified JSON path. If no path is provided, it defaults to 'messages.json'.",
-        "%load_message [path]": "Loads messages from a specified JSON path. If no path is provided, it defaults to 'messages.json'.",
-        "%tokens [prompt]": "EXPERIMENTAL: Calculate the tokens used by the next request based on the current conversation's messages and estimate the cost of that request; optionally provide a prompt to also calculate the tokens used by that prompt and the total amount of tokens that will be sent with the next request",
+        "%reset": "Reset the current session.",
+        "%undo": "Remove previous messages and their response from the message history.",
+        "%save_message [path]": "Save messages to a specified JSON path. Defaults to 'messages.json'.",
+        "%load_message [path]": "Load messages from a specified JSON path. Defaults to 'messages.json'.",
+        "%tokens [prompt]": "EXPERIMENTAL: Estimate tokens for the next request and optionally include an additional prompt.",
         "%help": "Show this help message.",
-        "%info": "Show system and interpreter information",
-        "%jupyter": "Export the conversation to a Jupyter notebook file",
-        "%markdown [path]": "Export the conversation to a specified Markdown path. If no path is provided, it will be saved to the Downloads folder with a generated conversation name.",
+        "%info": "Show system and interpreter information.",
+        "%jupyter": "Export the conversation to a Jupyter notebook with progress feedback and quick actions.",
+        "%markdown [path]": "Export the conversation to Markdown with progress feedback. Defaults to the Downloads folder.",
     }
 
-    base_message = ["> **Available Commands:**\n\n"]
+    body_lines = ["**Available Commands:**", ""]
 
-    # Add each command and its description to the message
     for cmd, desc in commands_description.items():
-        base_message.append(f"- `{cmd}`: {desc}\n")
+        body_lines.append(f"- `{cmd}`: {desc}")
 
-    additional_info = [
-        "\n\nFor further assistance, please join our community Discord or consider contributing to the project's development."
-    ]
+    body_lines.extend(
+        [
+            "",
+            "_Command responses appear in timestamped panels with quick actions to open files, copy their paths, or trigger exports._",
+            "_Long-running exports surface ephemeral progress toasts before posting their completion summary here._",
+            "",
+            "For further assistance, please join our community Discord or consider contributing to the project's development.",
+        ]
+    )
 
-    # Combine the base message with the additional info
-    full_message = base_message + additional_info
-
-    self.display_message("".join(full_message))
+    _display_magic_panel(self, "\n".join(body_lines), status="info")
 
 
 def handle_verbose(self, arguments=None):
     if arguments == "" or arguments == "true":
-        self.display_message("> Entered verbose mode")
+        _display_magic_panel(
+            self,
+            "Verbose mode enabled. Streaming chunks will now be logged to the console.",
+            status="success",
+        )
         print("\n\nCurrent messages:\n")
         for message in self.messages:
             message = message.copy()
@@ -94,15 +217,27 @@ def handle_verbose(self, arguments=None):
         print("\n")
         self.verbose = True
     elif arguments == "false":
-        self.display_message("> Exited verbose mode")
+        _display_magic_panel(
+            self,
+            "Verbose mode disabled.",
+            status="success",
+        )
         self.verbose = False
     else:
-        self.display_message("> Unknown argument to verbose command.")
+        _display_magic_panel(
+            self,
+            "Unknown argument supplied to `%verbose`. Use `true` or `false`.",
+            status="error",
+        )
 
 
 def handle_debug(self, arguments=None):
     if arguments == "" or arguments == "true":
-        self.display_message("> Entered debug mode")
+        _display_magic_panel(
+            self,
+            "Debug mode enabled. Raw message objects will be printed below.",
+            status="success",
+        )
         print("\n\nCurrent messages:\n")
         for message in self.messages:
             message = message.copy()
@@ -117,21 +252,41 @@ def handle_debug(self, arguments=None):
         print("\n")
         self.debug = True
     elif arguments == "false":
-        self.display_message("> Exited verbose mode")
+        _display_magic_panel(
+            self,
+            "Debug mode disabled.",
+            status="success",
+        )
         self.debug = False
     else:
-        self.display_message("> Unknown argument to debug command.")
+        _display_magic_panel(
+            self,
+            "Unknown argument supplied to `%debug`. Use `true` or `false`.",
+            status="error",
+        )
 
 
 def handle_auto_run(self, arguments=None):
     if arguments == "" or arguments == "true":
-        self.display_message("> Entered auto_run mode")
+        _display_magic_panel(
+            self,
+            "Auto-run enabled. Interpreter will execute approved code without prompting.",
+            status="success",
+        )
         self.auto_run = True
     elif arguments == "false":
-        self.display_message("> Exited auto_run mode")
+        _display_magic_panel(
+            self,
+            "Auto-run disabled. Execution will require confirmation.",
+            status="success",
+        )
         self.auto_run = False
     else:
-        self.display_message("> Unknown argument to auto_run command.")
+        _display_magic_panel(
+            self,
+            "Unknown argument supplied to `%auto_run`. Use `true` or `false`.",
+            status="error",
+        )
 
 
 def handle_info(self, arguments):
@@ -140,12 +295,20 @@ def handle_info(self, arguments):
 
 def handle_reset(self, arguments):
     self.reset()
-    self.display_message("> Reset Done")
+    _display_magic_panel(
+        self,
+        "Conversation reset. Interpreter state cleared.",
+        status="success",
+    )
 
 
-def default_handle(self, arguments):
-    self.display_message("> Unknown command")
-    handle_help(self, arguments)
+def default_handle(self, command):
+    _display_magic_panel(
+        self,
+        f"Unknown command `%{command}`. Showing help.",
+        status="error",
+    )
+    handle_help(self, command)
 
 
 def handle_save_message(self, json_path):
@@ -156,7 +319,14 @@ def handle_save_message(self, json_path):
     with open(json_path, "w") as f:
         json.dump(self.messages, f, indent=2)
 
-    self.display_message(f"> messages json export to {os.path.abspath(json_path)}")
+    absolute_path = os.path.abspath(json_path)
+    _display_magic_panel(
+        self,
+        f"Conversation saved to `{absolute_path}`.",
+        status="success",
+        path=absolute_path,
+        actions=DEFAULT_ACTIONS,
+    )
 
 
 def handle_load_message(self, json_path):
@@ -167,7 +337,14 @@ def handle_load_message(self, json_path):
     with open(json_path, "r") as f:
         self.messages = json.load(f)
 
-    self.display_message(f"> messages json loaded from {os.path.abspath(json_path)}")
+    absolute_path = os.path.abspath(json_path)
+    _display_magic_panel(
+        self,
+        f"Conversation loaded from `{absolute_path}`.",
+        status="success",
+        path=absolute_path,
+        actions=DEFAULT_ACTIONS,
+    )
 
 
 def handle_count_tokens(self, prompt):
@@ -185,9 +362,7 @@ def handle_count_tokens(self, prompt):
         )
 
     outputs.append(
-        (
-            f"> Tokens sent with next request as context: {conversation_tokens} (Estimated Cost: ${conversation_cost})"
-        )
+        f"**Context tokens:** {conversation_tokens} _(estimated cost: ${conversation_cost:.6f})_"
     )
 
     if prompt:
@@ -195,21 +370,21 @@ def handle_count_tokens(self, prompt):
             messages=[prompt], model=self.llm.model
         )
         outputs.append(
-            f"> Tokens used by this prompt: {prompt_tokens} (Estimated Cost: ${prompt_cost})"
+            f"**Prompt tokens:** {prompt_tokens} _(estimated cost: ${prompt_cost:.6f})_"
         )
 
         total_tokens = conversation_tokens + prompt_tokens
         total_cost = conversation_cost + prompt_cost
 
         outputs.append(
-            f"> Total tokens for next request with this prompt: {total_tokens} (Estimated Cost: ${total_cost})"
+            f"**Total tokens (context + prompt):** {total_tokens} _(estimated cost: ${total_cost:.6f})_"
         )
 
     outputs.append(
-        f"**Note**: This functionality is currently experimental and may not be accurate. Please report any issues you find to the [Open Interpreter GitHub repository](https://github.com/OpenInterpreter/open-interpreter)."
+        "_Token estimates are experimental. Please report discrepancies on the [Open Interpreter GitHub repository](https://github.com/OpenInterpreter/open-interpreter)._"
     )
 
-    self.display_message("\n".join(outputs))
+    _display_magic_panel(self, "\n".join(outputs), status="info")
 
 
 def get_downloads_path():
@@ -267,47 +442,104 @@ def jupyter(self, arguments):
     filename = f"open-interpreter-{formatted_time}.ipynb"
     notebook_path = os.path.join(downloads, filename)
     nb = new_notebook()
-    cells = []
 
-    for msg in self.messages:
-        if msg["role"] == "user" and msg["type"] == "message":
-            # Prefix user messages with '>' to render them as block quotes, so they stand out
-            content = f"> {msg['content']}"
-            cells.append(new_markdown_cell(content))
-        elif msg["role"] == "assistant" and msg["type"] == "message":
-            cells.append(new_markdown_cell(msg["content"]))
-        elif msg["type"] == "code":
-            # Handle the language of the code cell
-            if "format" in msg and msg["format"]:
-                language = msg["format"]
-            else:
-                language = "python"  # Default to Python if no format specified
-            code_cell = new_code_cell(msg["content"])
-            code_cell.metadata.update({"language": language})
-            cells.append(code_cell)
+    def _export(progress_display: Optional[Progress], task_id: Optional[int]) -> int:
+        cells = []
+        if progress_display and task_id is not None:
+            progress_display.update(task_id, description="Building notebook cells")
 
-    nb["cells"] = cells
+        for msg in self.messages:
+            if msg["role"] == "user" and msg["type"] == "message":
+                content = f"> {msg['content']}"
+                cells.append(new_markdown_cell(content))
+            elif msg["role"] == "assistant" and msg["type"] == "message":
+                cells.append(new_markdown_cell(msg["content"]))
+            elif msg["type"] == "code":
+                if "format" in msg and msg["format"]:
+                    language = msg["format"]
+                else:
+                    language = "python"
+                code_cell = new_code_cell(msg["content"])
+                code_cell.metadata.update({"language": language})
+                cells.append(code_cell)
 
-    with open(notebook_path, "w", encoding="utf-8") as f:
-        nbformat.write(nb, f)
+            if progress_display and task_id is not None:
+                progress_display.advance(task_id)
 
-    print("")
-    self.display_message(
-        f"Jupyter notebook file exported to {os.path.abspath(notebook_path)}"
+        nb["cells"] = cells
+
+        if progress_display and task_id is not None:
+            progress_display.update(task_id, description="Writing notebook file")
+
+        with open(notebook_path, "w", encoding="utf-8") as f:
+            nbformat.write(nb, f)
+
+        if progress_display and task_id is not None:
+            progress_display.advance(task_id)
+
+        return len(cells)
+
+    total_steps = len(self.messages) + 1
+    cell_count = _run_export_with_progress(
+        self,
+        "Exporting Jupyter notebook",
+        total_steps=total_steps,
+        worker=_export,
+    )
+
+    absolute_path = os.path.abspath(notebook_path)
+    _display_magic_panel(
+        self,
+        f"Jupyter notebook exported with {cell_count} cells.",
+        status="success",
+        path=absolute_path,
+        actions=DEFAULT_ACTIONS,
     )
 
 
 def markdown(self, export_path: str):
     # If it's an empty conversations
     if len(self.messages) == 0:
-        print("No messages to export.")
+        _display_magic_panel(
+            self,
+            "No messages to export yet. Start a conversation before exporting.",
+            status="warning",
+        )
         return
 
     # If user doesn't specify the export path, then save the exported PDF in '~/Downloads'
     if not export_path:
         export_path = get_downloads_path() + f"/{self.conversation_filename[:-4]}md"
 
-    export_to_markdown(self.messages, export_path)
+    export_path = os.path.abspath(export_path)
+
+    def _export(progress_display: Optional[Progress], task_id: Optional[int]) -> int:
+        if progress_display and task_id is not None:
+            progress_display.update(task_id, description="Compiling transcript")
+            progress_display.advance(task_id)
+            progress_display.update(task_id, description="Writing Markdown")
+
+        export_to_markdown(self.messages, export_path, announce=False)
+
+        if progress_display and task_id is not None:
+            progress_display.advance(task_id)
+
+        return len(self.messages)
+
+    message_count = _run_export_with_progress(
+        self,
+        "Preparing Markdown export",
+        total_steps=2,
+        worker=_export,
+    )
+
+    _display_magic_panel(
+        self,
+        f"Markdown transcript exported ({message_count} messages).",
+        status="success",
+        path=export_path,
+        actions=DEFAULT_ACTIONS,
+    )
 
 
 def handle_magic_command(self, user_input):
@@ -345,7 +577,8 @@ def handle_magic_command(self, user_input):
         time.sleep(1.5)
         command = "verbose"
 
-    action = switch.get(
-        command, default_handle
-    )  # Get the function from the dictionary, or default_handle if not found
-    action(self, arguments)  # Execute the function
+    action = switch.get(command)
+    if action:
+        action(self, arguments)
+    else:
+        default_handle(self, command)

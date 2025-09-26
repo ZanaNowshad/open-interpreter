@@ -292,6 +292,8 @@ In the interactive mode, you can use the below commands to enhance your experien
 - `%tokens [prompt]`: (_Experimental_) Calculate the tokens that will be sent with the next prompt as context and estimate their cost. Optionally calculate the tokens and estimated cost of a `prompt` if one is provided. Relies on [LiteLLM's `cost_per_token()` method](https://docs.litellm.ai/docs/completion/token_usage#2-cost_per_token) for estimated costs.
 - `%help`: Show the help message.
 
+> Magic command responses are rendered in Rich panels that include status, timestamps, and quick action chips (open, copy path, export). Long-running exports surface ephemeral progress bars before posting their completion summaries back into the chat.
+
 ### Configuration / Profiles
 
 Open Interpreter allows you to set default behaviors using `yaml` files.
