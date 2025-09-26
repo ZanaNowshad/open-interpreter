@@ -5,8 +5,11 @@ If you were to build a frontend this would be a way to do it.
 
 try:
     import readline
+
+    READLINE_AVAILABLE = True
 except ImportError:
-    pass
+    readline = None  # type: ignore
+    READLINE_AVAILABLE = False
 
 import os
 import platform
@@ -36,12 +39,69 @@ examples = [
     "Can you set my system to light mode?",
 ]
 random.shuffle(examples)
+
+QUICK_START_SHORTCUTS = {
+    str(index + 1): example for index, example in enumerate(examples)
+}
 try:
     for example in examples:
         readline.add_history(example)
 except:
     # If they don't have readline, that's fine
     pass
+
+
+def _render_command_chips():
+    quick_start_items = list(QUICK_START_SHORTCUTS.items())
+
+    if not quick_start_items:
+        return
+
+    try:
+        from rich.columns import Columns
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.text import Text
+
+        console = Console()
+        panels = []
+
+        for shortcut, prompt in quick_start_items:
+            text = Text(prompt, justify="left", no_wrap=True)
+            panels.append(
+                Panel(
+                    text,
+                    title=f":{shortcut}",
+                    border_style="cyan",
+                    padding=(0, 1),
+                )
+            )
+
+        console.print(Columns(panels, expand=True))
+    except Exception:
+        print("Quick start prompts:")
+        for shortcut, prompt in quick_start_items:
+            print(f"  :{shortcut}  {prompt}")
+        print(
+            "Copy one of the prompts above if Rich command chips are unavailable. "
+            "The :<number> shortcuts still work even without readline support."
+        )
+
+
+def _maybe_apply_quick_start(message):
+    if not isinstance(message, str):
+        return message
+
+    stripped = message.strip()
+
+    if stripped.startswith(":"):
+        shortcut = stripped[1:]
+        prompt = QUICK_START_SHORTCUTS.get(shortcut)
+
+        if prompt:
+            return prompt
+
+    return message
 
 
 def terminal_interface(interpreter, message):
@@ -80,7 +140,13 @@ def terminal_interface(interpreter, message):
     active_block = None
     voice_subprocess = None
 
+    quick_start_rendered = False
+
     while True:
+        if interactive and not quick_start_rendered:
+            _render_command_chips()
+            quick_start_rendered = True
+
         if interactive:
             if (
                 len(interpreter.messages) == 1
@@ -102,6 +168,8 @@ def terminal_interface(interpreter, message):
                     # Treat Ctrl-D on an empty line the same as Ctrl-C by exiting gracefully
                     interpreter.display_message("\n\n`Exiting...`")
                     raise KeyboardInterrupt
+
+                message = _maybe_apply_quick_start(message)
 
             try:
                 # This lets users hit the up arrow key for past messages
