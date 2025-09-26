@@ -4,6 +4,7 @@ from rich.box import MINIMAL
 from rich.markdown import Markdown
 from rich.panel import Panel
 
+from ..theme import TERMINAL_THEME
 from .base_block import BaseBlock
 
 
@@ -23,7 +24,12 @@ class MessageBlock(BaseBlock):
             content += "●"
 
         markdown = Markdown(content.strip())
-        panel = Panel(markdown, box=MINIMAL)
+        panel = Panel(
+            markdown,
+            box=MINIMAL,
+            border_style=TERMINAL_THEME.message_border,
+            style=f"{TERMINAL_THEME.message_text} on {TERMINAL_THEME.message_background}",
+        )
         self.live.update(panel)
         self.live.refresh()
 

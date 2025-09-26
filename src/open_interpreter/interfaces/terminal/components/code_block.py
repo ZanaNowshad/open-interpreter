@@ -4,6 +4,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
+from ..theme import TERMINAL_THEME
 from .base_block import BaseBlock
 
 
@@ -63,7 +64,11 @@ class CodeBlock(BaseBlock):
             ):
                 # This is the active line, print it with a white background
                 syntax = Syntax(
-                    line, self.language, theme="bw", line_numbers=False, word_wrap=True
+                    line,
+                    self.language,
+                    theme=TERMINAL_THEME.syntax_theme_muted,
+                    line_numbers=False,
+                    word_wrap=True,
                 )
                 code_table.add_row(syntax, style="black on white")
             else:
@@ -71,20 +76,28 @@ class CodeBlock(BaseBlock):
                 syntax = Syntax(
                     line,
                     self.language,
-                    theme="monokai",
+                    theme=TERMINAL_THEME.syntax_theme,
                     line_numbers=False,
                     word_wrap=True,
                 )
                 code_table.add_row(syntax)
 
-        # Create a panel for the code
-        code_panel = Panel(code_table, box=MINIMAL, style="on #272722")
+        # Create a panel for the code using the shared theme
+        code_panel = Panel(
+            code_table,
+            box=MINIMAL,
+            style=f"on {TERMINAL_THEME.code_background}",
+        )
 
         # Create a panel for the output (if there is any)
         if self.output == "" or self.output == "None":
             output_panel = ""
         else:
-            output_panel = Panel(self.output, box=MINIMAL, style="#FFFFFF on #3b3b37")
+            output_panel = Panel(
+                self.output,
+                box=MINIMAL,
+                style=f"{TERMINAL_THEME.console_text} on {TERMINAL_THEME.console_background}",
+            )
 
         # Create a group with the code table and output panel
         group_items = [code_panel, output_panel]
