@@ -20,8 +20,12 @@ from ..core.utils.scan_code import scan_code
 from ..core.utils.system_debug_info import system_info
 from ..core.utils.truncate_output import truncate_output
 from .components.code_block import CodeBlock
+from .components.command_palette import CommandPalette
 from .components.message_block import MessageBlock
-from .magic_commands import handle_magic_command
+from .magic_commands import (
+    get_magic_command_palette_entries,
+    handle_magic_command,
+)
 from .utils.check_for_package import check_for_package
 from .utils.cli_input import cli_input
 from .utils.display_output import display_output
@@ -80,6 +84,10 @@ def terminal_interface(interpreter, message):
     active_block = None
     voice_subprocess = None
 
+    command_palette = CommandPalette(
+        lambda: get_magic_command_palette_entries(interpreter)
+    )
+
     while True:
         if interactive:
             if (
@@ -93,11 +101,11 @@ def terminal_interface(interpreter, message):
             else:
                 ### This is the primary input for Open Interpreter.
                 try:
-                    message = (
-                        cli_input("> ").strip()
-                        if interpreter.multi_line
-                        else input("> ").strip()
-                    )
+                    message = cli_input(
+                        "> ",
+                        interpreter=interpreter,
+                        command_palette=command_palette,
+                    ).strip()
                 except (KeyboardInterrupt, EOFError):
                     # Treat Ctrl-D on an empty line the same as Ctrl-C by exiting gracefully
                     interpreter.display_message("\n\n`Exiting...`")

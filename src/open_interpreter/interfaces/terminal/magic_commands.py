@@ -1,23 +1,71 @@
+import importlib
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 from ..core.utils.system_debug_info import system_info
 from .utils.count_tokens import count_messages_tokens
 from .utils.export_to_markdown import export_to_markdown
 
 
-def handle_undo(self, arguments):
-    # Removes all messages after the most recent user entry (and the entry itself).
-    # Therefore user can jump back to the latest point of conversation.
-    # Also gives a visual representation of the messages removed.
+@dataclass(frozen=True)
+class CommandMetadata:
+    """Serializable data describing a magic command."""
+
+    name: str
+    syntax: str
+    description: str
+    category: str
+    icon: str
+    shortcut: Optional[str] = None
+    state: Optional[str] = None
+    palette_snippet: Optional[str] = None
+    insertable: bool = True
+
+
+@dataclass(frozen=True)
+class MagicCommand:
+    """Declarative definition for a magic command handler."""
+
+    name: str
+    syntax: str
+    description: str
+    handler: Callable[[object, str], None]
+    category: str
+    icon: str
+    shortcut: Optional[str] = None
+    aliases: Sequence[str] = ()
+    palette_snippet: Optional[str] = None
+    state_getter: Optional[Callable[[object], str]] = None
+
+    def to_metadata(self, interpreter: object) -> CommandMetadata:
+        state = self.state_getter(interpreter) if self.state_getter else None
+        snippet = self.palette_snippet or f"%{self.name} "
+        return CommandMetadata(
+            name=self.name,
+            syntax=self.syntax,
+            description=self.description,
+            category=self.category,
+            icon=self.icon,
+            shortcut=self.shortcut,
+            state=state,
+            palette_snippet=snippet,
+            insertable=True,
+        )
+
+
+def handle_undo(self, arguments: str) -> None:
+    """Remove the most recent user interaction from the conversation."""
 
     if len(self.messages) == 0:
         return
-    # Find the index of the last 'role': 'user' entry
+
     last_user_index = None
     for i, message in enumerate(self.messages):
         if message.get("role") == "user":
@@ -25,59 +73,47 @@ def handle_undo(self, arguments):
 
     removed_messages = []
 
-    # Remove all messages after the last 'role': 'user'
     if last_user_index is not None:
         removed_messages = self.messages[last_user_index:]
         self.messages = self.messages[:last_user_index]
 
-    print("")  # Aesthetics.
+    print("")
 
-    # Print out a preview of what messages were removed.
     for message in removed_messages:
-        if "content" in message and message["content"] != None:
+        if "content" in message and message["content"] is not None:
             self.display_message(
                 f"**Removed message:** `\"{message['content'][:30]}...\"`"
             )
         elif "function_call" in message:
-            self.display_message(
-                f"**Removed codeblock**"
-            )  # TODO: Could add preview of code removed here.
+            self.display_message("**Removed codeblock**")
 
-    print("")  # Aesthetics.
+    print("")
 
 
-def handle_help(self, arguments):
-    commands_description = {
-        "%% [commands]": "Run commands in system shell",
-        "%verbose [true/false]": "Toggle verbose mode. Without arguments or with 'true', it enters verbose mode. With 'false', it exits verbose mode.",
-        "%reset": "Resets the current session.",
-        "%undo": "Remove previous messages and its response from the message history.",
-        "%save_message [path]": "Saves messages to a specified JSON path. If no path is provided, it defaults to 'messages.json'.",
-        "%load_message [path]": "Loads messages from a specified JSON path. If no path is provided, it defaults to 'messages.json'.",
-        "%tokens [prompt]": "EXPERIMENTAL: Calculate the tokens used by the next request based on the current conversation's messages and estimate the cost of that request; optionally provide a prompt to also calculate the tokens used by that prompt and the total amount of tokens that will be sent with the next request",
-        "%help": "Show this help message.",
-        "%info": "Show system and interpreter information",
-        "%jupyter": "Export the conversation to a Jupyter notebook file",
-        "%markdown [path]": "Export the conversation to a specified Markdown path. If no path is provided, it will be saved to the Downloads folder with a generated conversation name.",
-    }
+def handle_help(self, arguments: str) -> None:
+    catalog = get_magic_command_catalog(self)
 
-    base_message = ["> **Available Commands:**\n\n"]
+    lines = ["> **Available Commands:**\n\n"]
+    for category, payload in catalog.items():
+        icon = payload["icon"]
+        lines.append(f"### {icon} {category}\n")
+        for entry in payload["commands"]:
+            shortcut = f" _(Shortcut: {entry.shortcut})" if entry.shortcut else ""
+            state = f" _(State: {entry.state})" if entry.state else ""
+            lines.append(
+                f"- `{entry.syntax}` — {entry.description}{shortcut}{state}\n"
+            )
+        lines.append("\n")
 
-    # Add each command and its description to the message
-    for cmd, desc in commands_description.items():
-        base_message.append(f"- `{cmd}`: {desc}\n")
+    lines.append(
+        "For further assistance, please join our community Discord or consider "
+        "contributing to the project's development."
+    )
 
-    additional_info = [
-        "\n\nFor further assistance, please join our community Discord or consider contributing to the project's development."
-    ]
-
-    # Combine the base message with the additional info
-    full_message = base_message + additional_info
-
-    self.display_message("".join(full_message))
+    self.display_message("".join(lines))
 
 
-def handle_verbose(self, arguments=None):
+def handle_verbose(self, arguments: Optional[str] = None) -> None:
     if arguments == "" or arguments == "true":
         self.display_message("> Entered verbose mode")
         print("\n\nCurrent messages:\n")
@@ -100,7 +136,7 @@ def handle_verbose(self, arguments=None):
         self.display_message("> Unknown argument to verbose command.")
 
 
-def handle_debug(self, arguments=None):
+def handle_debug(self, arguments: Optional[str] = None) -> None:
     if arguments == "" or arguments == "true":
         self.display_message("> Entered debug mode")
         print("\n\nCurrent messages:\n")
@@ -123,7 +159,7 @@ def handle_debug(self, arguments=None):
         self.display_message("> Unknown argument to debug command.")
 
 
-def handle_auto_run(self, arguments=None):
+def handle_auto_run(self, arguments: Optional[str] = None) -> None:
     if arguments == "" or arguments == "true":
         self.display_message("> Entered auto_run mode")
         self.auto_run = True
@@ -134,46 +170,46 @@ def handle_auto_run(self, arguments=None):
         self.display_message("> Unknown argument to auto_run command.")
 
 
-def handle_info(self, arguments):
+def handle_info(self, arguments: str) -> None:
     system_info(self)
 
 
-def handle_reset(self, arguments):
+def handle_reset(self, arguments: str) -> None:
     self.reset()
     self.display_message("> Reset Done")
 
 
-def default_handle(self, arguments):
+def default_handle(self, arguments: str) -> None:
     self.display_message("> Unknown command")
     handle_help(self, arguments)
 
 
-def handle_save_message(self, json_path):
+def handle_save_message(self, json_path: str) -> None:
     if json_path == "":
         json_path = "messages.json"
     if not json_path.endswith(".json"):
         json_path += ".json"
-    with open(json_path, "w") as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(self.messages, f, indent=2)
 
     self.display_message(f"> messages json export to {os.path.abspath(json_path)}")
 
 
-def handle_load_message(self, json_path):
+def handle_load_message(self, json_path: str) -> None:
     if json_path == "":
         json_path = "messages.json"
     if not json_path.endswith(".json"):
         json_path += ".json"
-    with open(json_path, "r") as f:
+    with open(json_path, "r", encoding="utf-8") as f:
         self.messages = json.load(f)
 
     self.display_message(f"> messages json loaded from {os.path.abspath(json_path)}")
 
 
-def handle_count_tokens(self, prompt):
+def handle_count_tokens(self, prompt: str) -> None:
     messages = [{"role": "system", "message": self.system_message}] + self.messages
 
-    outputs = []
+    outputs: List[str] = []
 
     if len(self.messages) == 0:
         (conversation_tokens, conversation_cost) = count_messages_tokens(
@@ -186,7 +222,8 @@ def handle_count_tokens(self, prompt):
 
     outputs.append(
         (
-            f"> Tokens sent with next request as context: {conversation_tokens} (Estimated Cost: ${conversation_cost})"
+            f"> Tokens sent with next request as context: {conversation_tokens} "
+            f"(Estimated Cost: ${conversation_cost})"
         )
     )
 
@@ -200,64 +237,54 @@ def handle_count_tokens(self, prompt):
 
         total_tokens = conversation_tokens + prompt_tokens
         total_cost = conversation_cost + prompt_cost
-
         outputs.append(
-            f"> Total tokens for next request with this prompt: {total_tokens} (Estimated Cost: ${total_cost})"
+            f"> Total tokens for next request with this prompt: {total_tokens} "
+            f"(Estimated Cost: ${total_cost})"
         )
 
     outputs.append(
-        f"**Note**: This functionality is currently experimental and may not be accurate. Please report any issues you find to the [Open Interpreter GitHub repository](https://github.com/OpenInterpreter/open-interpreter)."
+        "**Note**: This functionality is currently experimental and may not be "
+        "accurate. Please report any issues you find to the "
+        "[Open Interpreter GitHub repository](https://github.com/OpenInterpreter/open-interpreter)."
     )
 
     self.display_message("\n".join(outputs))
 
 
-def get_downloads_path():
+def get_downloads_path() -> str:
     if os.name == "nt":
-        # For Windows
         downloads = os.path.join(os.environ["USERPROFILE"], "Downloads")
     else:
-        # For MacOS and Linux
         downloads = os.path.join(os.path.expanduser("~"), "Downloads")
-        # For some GNU/Linux distros, there's no '~/Downloads' dir by default
         if not os.path.exists(downloads):
             os.makedirs(downloads)
     return downloads
 
 
-def install_and_import(package):
-    try:
-        module = __import__(package)
-    except ImportError:
-        try:
-            # Install the package silently with pip
-            print("")
-            print(f"Installing {package}...")
-            print("")
+def install_and_import(package: str):
+    if importlib.util.find_spec(package) is None:
+        print("")
+        print(f"Installing {package}...")
+        print("")
+        command = [sys.executable, "-m", "pip", "install", package]
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode != 0:
+            fallback = [sys.executable, "-m", "pip3", "install", package]
             subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", package],
+                fallback,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            module = __import__(package)
-        except subprocess.CalledProcessError:
-            # If pip fails, try pip3
-            try:
-                subprocess.check_call(
-                    [sys.executable, "-m", "pip3", "install", package],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except subprocess.CalledProcessError:
-                print(f"Failed to install package {package}.")
-                return
-    finally:
-        globals()[package] = module
-    return module
+
+    return importlib.import_module(package)
 
 
-def jupyter(self, arguments):
-    # Dynamically install nbformat if not already installed
+def jupyter(self, arguments: str) -> None:
     nbformat = install_and_import("nbformat")
     from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
@@ -271,17 +298,15 @@ def jupyter(self, arguments):
 
     for msg in self.messages:
         if msg["role"] == "user" and msg["type"] == "message":
-            # Prefix user messages with '>' to render them as block quotes, so they stand out
             content = f"> {msg['content']}"
             cells.append(new_markdown_cell(content))
         elif msg["role"] == "assistant" and msg["type"] == "message":
             cells.append(new_markdown_cell(msg["content"]))
         elif msg["type"] == "code":
-            # Handle the language of the code cell
             if "format" in msg and msg["format"]:
                 language = msg["format"]
             else:
-                language = "python"  # Default to Python if no format specified
+                language = "python"
             code_cell = new_code_cell(msg["content"])
             code_cell.metadata.update({"language": language})
             cells.append(code_cell)
@@ -297,44 +322,219 @@ def jupyter(self, arguments):
     )
 
 
-def markdown(self, export_path: str):
-    # If it's an empty conversations
+def markdown(self, export_path: str) -> None:
     if len(self.messages) == 0:
         print("No messages to export.")
         return
 
-    # If user doesn't specify the export path, then save the exported PDF in '~/Downloads'
     if not export_path:
         export_path = get_downloads_path() + f"/{self.conversation_filename[:-4]}md"
 
     export_to_markdown(self.messages, export_path)
 
 
-def handle_magic_command(self, user_input):
-    # Handle shell
+MAGIC_COMMANDS: List[MagicCommand] = [
+    MagicCommand(
+        name="help",
+        syntax="%help",
+        description="Show this help message.",
+        handler=handle_help,
+        category="General",
+        icon="❓",
+        palette_snippet="%help",
+    ),
+    MagicCommand(
+        name="verbose",
+        syntax="%verbose [true/false]",
+        description="Toggle verbose mode for detailed logs.",
+        handler=handle_verbose,
+        category="Diagnostics",
+        icon="🩺",
+        aliases=("debug",),
+        palette_snippet="%verbose ",
+        state_getter=lambda interpreter: "ON" if getattr(interpreter, "verbose", False) else "OFF",
+    ),
+    MagicCommand(
+        name="reset",
+        syntax="%reset",
+        description="Reset the current session.",
+        handler=handle_reset,
+        category="Session",
+        icon="🔁",
+    ),
+    MagicCommand(
+        name="undo",
+        syntax="%undo",
+        description="Remove the last user message and assistant response.",
+        handler=handle_undo,
+        category="Editing",
+        icon="✏️",
+    ),
+    MagicCommand(
+        name="save_message",
+        syntax="%save_message [path]",
+        description="Export the conversation to a JSON file.",
+        handler=handle_save_message,
+        category="Export",
+        icon="💾",
+        palette_snippet="%save_message ",
+    ),
+    MagicCommand(
+        name="load_message",
+        syntax="%load_message [path]",
+        description="Load a conversation from a JSON file.",
+        handler=handle_load_message,
+        category="Import",
+        icon="📥",
+        palette_snippet="%load_message ",
+    ),
+    MagicCommand(
+        name="tokens",
+        syntax="%tokens [prompt]",
+        description="Estimate token usage and cost for the next request.",
+        handler=handle_count_tokens,
+        category="Diagnostics",
+        icon="🩺",
+        palette_snippet="%tokens ",
+    ),
+    MagicCommand(
+        name="info",
+        syntax="%info",
+        description="Display system and interpreter information.",
+        handler=handle_info,
+        category="Diagnostics",
+        icon="🩺",
+    ),
+    MagicCommand(
+        name="auto_run",
+        syntax="%auto_run [true/false]",
+        description="Toggle automatic execution of generated code.",
+        handler=handle_auto_run,
+        category="Execution",
+        icon="⚙️",
+        palette_snippet="%auto_run ",
+        state_getter=lambda interpreter: "ON" if getattr(interpreter, "auto_run", False) else "OFF",
+    ),
+    MagicCommand(
+        name="jupyter",
+        syntax="%jupyter",
+        description="Export the conversation to a Jupyter notebook.",
+        handler=jupyter,
+        category="Export",
+        icon="💾",
+    ),
+    MagicCommand(
+        name="markdown",
+        syntax="%markdown [path]",
+        description="Export the conversation to Markdown.",
+        handler=markdown,
+        category="Export",
+        icon="💾",
+        palette_snippet="%markdown ",
+    ),
+]
+
+
+_COMMAND_LOOKUP: Dict[str, MagicCommand] = {}
+for magic_command in MAGIC_COMMANDS:
+    _COMMAND_LOOKUP[magic_command.name] = magic_command
+    for alias in magic_command.aliases:
+        _COMMAND_LOOKUP[alias] = magic_command
+
+
+def iter_magic_command_metadata(interpreter: object) -> Iterable[CommandMetadata]:
+    for command in MAGIC_COMMANDS:
+        yield command.to_metadata(interpreter)
+
+    yield CommandMetadata(
+        name="shell",
+        syntax="%% [command]",
+        description="Run a command in the system shell.",
+        category="Execution",
+        icon="⚙️",
+        shortcut="%%",
+        palette_snippet="%% ",
+        insertable=True,
+    )
+
+    yield CommandMetadata(
+        name="multi_line_mode",
+        syntax="Toggle multi-line input",
+        description="Switch interactive input between single-line and multi-line capture.",
+        category="Input",
+        icon="⌨️",
+        shortcut="F2",
+        state="ON" if getattr(interpreter, "multi_line", False) else "OFF",
+        palette_snippet=None,
+        insertable=False,
+    )
+
+    yield CommandMetadata(
+        name="voice_capture",
+        syntax="Toggle voice capture",
+        description="Enable or disable speaking assistant responses aloud.",
+        category="Input",
+        icon="🎙️",
+        shortcut="F3",
+        state="ON" if getattr(interpreter, "speak_messages", False) else "OFF",
+        palette_snippet=None,
+        insertable=False,
+    )
+
+    yield CommandMetadata(
+        name="safe_mode",
+        syntax="Cycle safe execution mode",
+        description="Cycle safe-mode enforcement between ask, auto, and off.",
+        category="Execution",
+        icon="⚙️",
+        shortcut="F4",
+        state=str(getattr(interpreter, "safe_mode", "off") or "off").upper(),
+        palette_snippet=None,
+        insertable=False,
+    )
+
+    yield CommandMetadata(
+        name="auto_run_toggle",
+        syntax="Toggle automatic execution",
+        description="Switch between manual approvals and automatic code execution.",
+        category="Execution",
+        icon="⚙️",
+        shortcut="F5",
+        state="ON" if getattr(interpreter, "auto_run", False) else "OFF",
+        palette_snippet=None,
+        insertable=False,
+    )
+
+
+def get_magic_command_catalog(interpreter: object) -> Dict[str, Dict[str, object]]:
+    catalog: Dict[str, Dict[str, object]] = {}
+    for entry in iter_magic_command_metadata(interpreter):
+        bucket = catalog.setdefault(
+            entry.category,
+            {"icon": entry.icon, "commands": []},
+        )
+        bucket["commands"].append(entry)
+
+    for payload in catalog.values():
+        payload["commands"].sort(key=lambda item: item.name)
+
+    return dict(sorted(catalog.items(), key=lambda item: item[0]))
+
+
+def get_magic_command_palette_entries(interpreter: object) -> List[CommandMetadata]:
+    return list(iter_magic_command_metadata(interpreter))
+
+
+def handle_magic_command(self, user_input: str) -> None:
     if user_input.startswith("%%"):
         code = user_input[2:].strip()
         self.computer.run("shell", code, stream=False, display=True)
         print("")
         return
 
-    # split the command into the command and the arguments, by the first whitespace
-    switch = {
-        "help": handle_help,
-        "verbose": handle_verbose,
-        "debug": handle_debug,
-        "auto_run": handle_auto_run,
-        "reset": handle_reset,
-        "save_message": handle_save_message,
-        "load_message": handle_load_message,
-        "undo": handle_undo,
-        "tokens": handle_count_tokens,
-        "info": handle_info,
-        "jupyter": jupyter,
-        "markdown": markdown,
-    }
-
-    user_input = user_input[1:].strip()  # Capture the part after the `%`
+    user_input = user_input[1:].strip()
+    if not user_input:
+        return
     command = user_input.split(" ")[0]
     arguments = user_input[len(command) :].strip()
 
@@ -345,7 +545,10 @@ def handle_magic_command(self, user_input):
         time.sleep(1.5)
         command = "verbose"
 
-    action = switch.get(
-        command, default_handle
-    )  # Get the function from the dictionary, or default_handle if not found
-    action(self, arguments)  # Execute the function
+    action = _COMMAND_LOOKUP.get(command)
+    if action is None:
+        default_handle(self, arguments)
+        return
+
+    action.handler(self, arguments)
+
