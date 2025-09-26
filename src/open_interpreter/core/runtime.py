@@ -121,6 +121,11 @@ class OpenInterpreter:
         self.contribute_conversation = contribute_conversation
         self.plain_text_display = plain_text_display
         self.highlight_active_line = True  # additional setting to toggle active line highlighting. Defaults to True
+        self.profile_metadata = {}
+        self.active_profile = {}
+        self._cli_overrides = {}
+        self._cli_attribute_map = {}
+        self._command_palette_enabled = True
 
         # Loop messages
         self.loop = loop
