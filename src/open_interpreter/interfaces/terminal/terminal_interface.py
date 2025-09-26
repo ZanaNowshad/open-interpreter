@@ -14,13 +14,11 @@ import random
 import re
 import subprocess
 import tempfile
-import time
 
 from ..core.utils.scan_code import scan_code
 from ..core.utils.system_debug_info import system_info
-from ..core.utils.truncate_output import truncate_output
 from .components.code_block import CodeBlock
-from .components.message_block import MessageBlock
+from .history_renderer import ConversationHistoryRenderer
 from .magic_commands import handle_magic_command
 from .utils.check_for_package import check_for_package
 from .utils.cli_input import cli_input
@@ -77,7 +75,11 @@ def terminal_interface(interpreter, message):
     else:
         interactive = True
 
-    active_block = None
+    history_renderer = ConversationHistoryRenderer(
+        interpreter=interpreter,
+        plain_text=interpreter.plain_text_display,
+        max_output=getattr(interpreter, "max_output", None),
+    )
     voice_subprocess = None
 
     while True:
@@ -189,10 +191,11 @@ def terminal_interface(interpreter, message):
                         # OI is about to execute code. The user wants to approve this
 
                         # End the active code block so you can run input() below it
-                        if active_block and not interpreter.plain_text_display:
-                            active_block.refresh(cursor=False)
-                            active_block.end()
-                            active_block = None
+                        if (
+                            history_renderer.active_block
+                            and not interpreter.plain_text_display
+                        ):
+                            history_renderer.finalize()
 
                         code_to_run = chunk["content"]
                         language = code_to_run["format"]
@@ -228,10 +231,11 @@ def terminal_interface(interpreter, message):
                         if response.strip().lower() == "y":
                             # Create a new, identical block where the code will actually be run
                             # Conveniently, the chunk includes everything we need to do this:
-                            active_block = CodeBlock(interpreter)
-                            active_block.margin_top = False  # <- Aesthetic choice
-                            active_block.language = language
-                            active_block.code = code
+                            block = CodeBlock(interpreter)
+                            block.margin_top = False  # <- Aesthetic choice
+                            block.language = language
+                            block.code = code
+                            history_renderer.attach_block(block)
                         elif response.strip().lower() == "e":
                             # Edit
 
@@ -253,10 +257,11 @@ def terminal_interface(interpreter, message):
 
                             # Delete the temporary file
                             os.unlink(tf.name)
-                            active_block = CodeBlock()
-                            active_block.margin_top = False  # <- Aesthetic choice
-                            active_block.language = language
-                            active_block.code = code
+                            block = CodeBlock()
+                            block.margin_top = False  # <- Aesthetic choice
+                            block.language = language
+                            block.code = code
+                            history_renderer.attach_block(block)
                         else:
                             # User declined to run code.
                             interpreter.messages.append(
@@ -281,76 +286,54 @@ def terminal_interface(interpreter, message):
                         print(chunk.get("content", ""), end="", flush=True)
                     continue
 
-                if "end" in chunk and active_block:
-                    active_block.refresh(cursor=False)
+                if not interpreter.plain_text_display:
+                    history_renderer.process_chunk(chunk)
 
-                    if chunk["type"] in [
-                        "message",
-                        "console",
-                    ]:  # We don't stop on code's end — code + console output are actually one block.
-                        active_block.end()
-                        active_block = None
+                if (
+                    chunk["type"] == "message"
+                    and chunk.get("end")
+                    and interpreter.os
+                ):
+                    last_message = interpreter.messages[-1]["content"]
 
-                # Assistant message blocks
-                if chunk["type"] == "message":
-                    if "start" in chunk:
-                        active_block = MessageBlock()
-                        render_cursor = True
-
-                    if "content" in chunk:
-                        active_block.message += chunk["content"]
-
-                    if "end" in chunk and interpreter.os:
-                        last_message = interpreter.messages[-1]["content"]
-
-                        # Remove markdown lists and the line above markdown lists
-                        lines = last_message.split("\n")
-                        i = 0
-                        while i < len(lines):
-                            # Match markdown lists starting with hyphen, asterisk or number
-                            if re.match(r"^\s*([-*]|\d+\.)\s", lines[i]):
-                                del lines[i]
-                                if i > 0:
-                                    del lines[i - 1]
-                                    i -= 1
-                            else:
-                                i += 1
-                        message = "\n".join(lines)
-                        # Replace newlines with spaces, escape double quotes and backslashes
-                        sanitized_message = (
-                            message.replace("\\", "\\\\")
-                            .replace("\n", " ")
-                            .replace('"', '\\"')
-                        )
-
-                        # Display notification in OS mode
-                        interpreter.computer.os.notify(sanitized_message)
-
-                        # Speak message aloud
-                        if platform.system() == "Darwin" and interpreter.speak_messages:
-                            if voice_subprocess:
-                                voice_subprocess.terminate()
-                            voice_subprocess = subprocess.Popen(
-                                [
-                                    "osascript",
-                                    "-e",
-                                    f'say "{sanitized_message}" using "Fred"',
-                                ]
-                            )
+                    # Remove markdown lists and the line above markdown lists
+                    lines = last_message.split("\n")
+                    i = 0
+                    while i < len(lines):
+                        # Match markdown lists starting with hyphen, asterisk or number
+                        if re.match(r"^\s*([-*]|\d+\.)\s", lines[i]):
+                            del lines[i]
+                            if i > 0:
+                                del lines[i - 1]
+                                i -= 1
                         else:
-                            pass
-                            # User isn't on a Mac, so we can't do this. You should tell them something about that when they first set this up.
-                            # Or use a universal TTS library.
+                            i += 1
+                    message = "\n".join(lines)
+                    # Replace newlines with spaces, escape double quotes and backslashes
+                    sanitized_message = (
+                        message.replace("\\", "\\\\")
+                        .replace("\n", " ")
+                        .replace('"', '\\"')
+                    )
 
-                # Assistant code blocks
-                elif chunk["role"] == "assistant" and chunk["type"] == "code":
-                    if "start" in chunk:
-                        active_block = CodeBlock()
-                        active_block.language = chunk["format"]
-                        render_cursor = True
+                    # Display notification in OS mode
+                    interpreter.computer.os.notify(sanitized_message)
 
-                    if "content" in chunk:
-                        active_block.code += chunk["content"]
+                    # Speak message aloud
+                    if platform.system() == "Darwin" and interpreter.speak_messages:
+                        if voice_subprocess:
+                            voice_subprocess.terminate()
+                        voice_subprocess = subprocess.Popen(
+                            [
+                                "osascript",
+                                "-e",
+                                f'say "{sanitized_message}" using "Fred"',
+                            ]
+                        )
+                    else:
+                        pass
+                        # User isn't on a Mac, so we can't do this. You should tell them something about that when they first set this up.
+                        # Or use a universal TTS library.
 
                 # Computer can display visual types to user,
                 # Which sometimes creates more computer output (e.g. HTML errors, eventually)
@@ -420,105 +403,9 @@ def terminal_interface(interpreter, message):
                             "content"
                         ].strip()
 
-                # Console
-                if chunk["type"] == "console":
-                    render_cursor = False
-                    if "format" in chunk and chunk["format"] == "output":
-                        active_block.output += "\n" + chunk["content"]
-                        active_block.output = (
-                            active_block.output.strip()
-                        )  # ^ Aesthetic choice
 
-                        # Truncate output
-                        active_block.output = truncate_output(
-                            active_block.output,
-                            interpreter.max_output,
-                            add_scrollbars=False,
-                        )  # ^ Notice that this doesn't add the "scrollbars" line, which I think is fine
-                    if "format" in chunk and chunk["format"] == "active_line":
-                        active_block.active_line = chunk["content"]
-
-                        # Display action notifications if we're in OS mode
-                        if interpreter.os and active_block.active_line != None:
-                            action = ""
-
-                            code_lines = active_block.code.split("\n")
-                            if active_block.active_line < len(code_lines):
-                                action = code_lines[active_block.active_line].strip()
-
-                            if action.startswith("computer"):
-                                description = None
-
-                                # Extract arguments from the action
-                                start_index = action.find("(")
-                                end_index = action.rfind(")")
-                                if start_index != -1 and end_index != -1:
-                                    # (If we found both)
-                                    arguments = action[start_index + 1 : end_index]
-                                else:
-                                    arguments = None
-
-                                # NOTE: Do not put the text you're clicking on screen
-                                # (unless we figure out how to do this AFTER taking the screenshot)
-                                # otherwise it will try to click this notification!
-
-                                if any(
-                                    action.startswith(text)
-                                    for text in [
-                                        "computer.screenshot",
-                                        "computer.display.screenshot",
-                                        "computer.display.view",
-                                        "computer.view",
-                                    ]
-                                ):
-                                    description = "Viewing screen..."
-                                elif action == "computer.mouse.click()":
-                                    description = "Clicking..."
-                                elif action.startswith("computer.mouse.click("):
-                                    if "icon=" in arguments:
-                                        text_or_icon = "icon"
-                                    else:
-                                        text_or_icon = "text"
-                                    description = f"Clicking {text_or_icon}..."
-                                elif action.startswith("computer.mouse.move("):
-                                    if "icon=" in arguments:
-                                        text_or_icon = "icon"
-                                    else:
-                                        text_or_icon = "text"
-                                    if (
-                                        "click" in active_block.code
-                                    ):  # This could be better
-                                        description = f"Clicking {text_or_icon}..."
-                                    else:
-                                        description = f"Mousing over {text_or_icon}..."
-                                elif action.startswith("computer.keyboard.write("):
-                                    description = f"Typing {arguments}."
-                                elif action.startswith("computer.keyboard.hotkey("):
-                                    description = f"Pressing {arguments}."
-                                elif action.startswith("computer.keyboard.press("):
-                                    description = f"Pressing {arguments}."
-                                elif action == "computer.os.get_selected_text()":
-                                    description = f"Getting selected text."
-
-                                if description:
-                                    interpreter.computer.os.notify(description)
-
-                    if "start" in chunk:
-                        # We need to make a code block if we pushed out an HTML block first, which would have closed our code block.
-                        if not isinstance(active_block, CodeBlock):
-                            if active_block:
-                                active_block.end()
-                            active_block = CodeBlock()
-
-                if active_block:
-                    active_block.refresh(cursor=render_cursor)
-
-            # (Sometimes -- like if they CTRL-C quickly -- active_block is still None here)
-            if "active_block" in locals():
-                if active_block:
-                    active_block.end()
-                    active_block = None
-                    time.sleep(0.1)
+            if not interpreter.plain_text_display:
+                history_renderer.finalize()
 
             if not interactive:
                 # Don't loop
@@ -526,9 +413,8 @@ def terminal_interface(interpreter, message):
 
         except KeyboardInterrupt:
             # Exit gracefully
-            if "active_block" in locals() and active_block:
-                active_block.end()
-                active_block = None
+            if not interpreter.plain_text_display:
+                history_renderer.finalize()
 
             if interactive:
                 # (this cancels LLM, returns to the interactive "> " input)
@@ -536,6 +422,8 @@ def terminal_interface(interpreter, message):
             else:
                 break
         except:
+            if not interpreter.plain_text_display:
+                history_renderer.finalize()
             if interpreter.debug:
                 system_info(interpreter)
             raise
