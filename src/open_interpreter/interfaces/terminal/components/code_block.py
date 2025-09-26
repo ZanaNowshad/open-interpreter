@@ -20,6 +20,11 @@ class CodeBlock(BaseBlock):
             interpreter.highlight_active_line if interpreter else None
         )
 
+        # A shared cache used for pre-rendered syntax objects. This is optional
+        # and is primarily populated by utilities that replay past
+        # conversations.
+        self.syntax_cache = None
+
         # Define these for IDE auto-completion
         self.language = ""
         self.output = ""
@@ -56,25 +61,39 @@ class CodeBlock(BaseBlock):
         # Add each line of code to the table
         code_lines = code.strip().split("\n")
         for i, line in enumerate(code_lines, start=1):
-            if i == self.active_line and (
-                self.highlight_active_line
-                if self.highlight_active_line is not None
-                else True
-            ):
-                # This is the active line, print it with a white background
-                syntax = Syntax(
-                    line, self.language, theme="bw", line_numbers=False, word_wrap=True
+            is_active_line = (
+                i == self.active_line
+                and (
+                    self.highlight_active_line
+                    if self.highlight_active_line is not None
+                    else True
                 )
-                code_table.add_row(syntax, style="black on white")
+            )
+
+            theme = "bw" if is_active_line else "monokai"
+            cache_key = None
+
+            if self.syntax_cache is not None:
+                cache_key = (self.language, line, theme)
+                syntax = self.syntax_cache.get(cache_key)
             else:
-                # This is not the active line, print it normally
+                syntax = None
+
+            if syntax is None:
                 syntax = Syntax(
                     line,
                     self.language,
-                    theme="monokai",
+                    theme=theme,
                     line_numbers=False,
                     word_wrap=True,
                 )
+
+                if cache_key and self.syntax_cache is not None:
+                    self.syntax_cache[cache_key] = syntax
+
+            if is_active_line:
+                code_table.add_row(syntax, style="black on white")
+            else:
                 code_table.add_row(syntax)
 
         # Create a panel for the code
