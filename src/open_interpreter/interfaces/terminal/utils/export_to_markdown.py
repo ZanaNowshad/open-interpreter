@@ -1,6 +1,11 @@
-def export_to_markdown(messages: list[dict], export_path: str):
-    markdown = messages_to_markdown(messages)
-    with open(export_path, 'w') as f:
+from typing import Optional
+
+
+def export_to_markdown(
+    messages: list[dict], export_path: str, content: Optional[str] = None
+):
+    markdown = content if content is not None else messages_to_markdown(messages)
+    with open(export_path, "w", encoding="utf-8") as f:
         f.write(markdown)
     print(f"Exported current conversation to {export_path}")
 

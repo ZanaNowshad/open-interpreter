@@ -153,8 +153,14 @@ def handle_save_message(self, json_path):
         json_path = "messages.json"
     if not json_path.endswith(".json"):
         json_path += ".json"
-    with open(json_path, "w") as f:
-        json.dump(self.messages, f, indent=2)
+    payload: str
+    if hasattr(self, "transcript_as_json"):
+        payload = self.transcript_as_json()
+    else:
+        payload = json.dumps(self.messages, indent=2)
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        f.write(payload)
 
     self.display_message(f"> messages json export to {os.path.abspath(json_path)}")
 
@@ -307,7 +313,11 @@ def markdown(self, export_path: str):
     if not export_path:
         export_path = get_downloads_path() + f"/{self.conversation_filename[:-4]}md"
 
-    export_to_markdown(self.messages, export_path)
+    markdown_text = None
+    if hasattr(self, "transcript_as_markdown"):
+        markdown_text = self.transcript_as_markdown()
+
+    export_to_markdown(self.messages, export_path, content=markdown_text)
 
 
 def handle_magic_command(self, user_input):
