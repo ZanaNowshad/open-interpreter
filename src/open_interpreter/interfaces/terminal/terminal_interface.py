@@ -159,6 +159,76 @@ def terminal_interface(interpreter, message):
                     }
 
         try:
+            pending_updates = {
+                "code": [],
+                "output": [],
+                "active_line": None,
+            }
+            last_refresh_time = time.monotonic()
+            MIN_REFRESH_INTERVAL = 0.05
+            render_cursor = False
+
+            def reset_pending():
+                pending_updates["code"].clear()
+                pending_updates["output"].clear()
+                pending_updates["active_line"] = None
+
+            def flush_pending(force=False):
+                nonlocal last_refresh_time
+
+                if not active_block:
+                    reset_pending()
+                    return
+
+                has_updates = bool(pending_updates["code"]) or bool(
+                    pending_updates["output"]
+                ) or pending_updates["active_line"] is not None
+
+                if not has_updates:
+                    return
+
+                now = time.monotonic()
+                if not force and now - last_refresh_time < MIN_REFRESH_INTERVAL:
+                    return
+
+                updated = False
+
+                if pending_updates["code"] and hasattr(active_block, "code"):
+                    active_block.code += "".join(pending_updates["code"])
+                    pending_updates["code"].clear()
+                    updated = True
+
+                if pending_updates["output"] and hasattr(active_block, "output"):
+                    appended_output = "\n".join(
+                        [chunk for chunk in pending_updates["output"] if chunk]
+                    )
+                    pending_updates["output"].clear()
+
+                    if appended_output:
+                        if active_block.output:
+                            active_block.output += "\n" + appended_output
+                        else:
+                            active_block.output = appended_output
+
+                        active_block.output = active_block.output.strip()
+                        active_block.output = truncate_output(
+                            active_block.output,
+                            interpreter.max_output,
+                            add_scrollbars=False,
+                        )
+                        updated = True
+
+                if pending_updates["active_line"] is not None and hasattr(
+                    active_block, "active_line"
+                ):
+                    active_block.active_line = pending_updates["active_line"]
+                    pending_updates["active_line"] = None
+                    updated = True
+
+                if updated:
+                    active_block.refresh(cursor=render_cursor)
+                    last_refresh_time = now
+
             for chunk in interpreter.chat(message, display=False, stream=True):
                 yield chunk
 
@@ -176,6 +246,7 @@ def terminal_interface(interpreter, message):
                         chunk.get("format") == "output"
                         and "failsafeexception" in chunk["content"].lower()
                     ):
+                        flush_pending(force=True)
                         print("Fail-safe triggered (mouse in one of the four corners).")
                         break
 
@@ -193,6 +264,7 @@ def terminal_interface(interpreter, message):
                             active_block.refresh(cursor=False)
                             active_block.end()
                             active_block = None
+                            reset_pending()
 
                         code_to_run = chunk["content"]
                         language = code_to_run["format"]
@@ -282,6 +354,7 @@ def terminal_interface(interpreter, message):
                     continue
 
                 if "end" in chunk and active_block:
+                    flush_pending(force=True)
                     active_block.refresh(cursor=False)
 
                     if chunk["type"] in [
@@ -290,15 +363,19 @@ def terminal_interface(interpreter, message):
                     ]:  # We don't stop on code's end — code + console output are actually one block.
                         active_block.end()
                         active_block = None
+                        reset_pending()
 
                 # Assistant message blocks
                 if chunk["type"] == "message":
+                    flush_pending(force=True)
+
                     if "start" in chunk:
                         active_block = MessageBlock()
                         render_cursor = True
 
                     if "content" in chunk:
                         active_block.message += chunk["content"]
+                        active_block.refresh(cursor=render_cursor)
 
                     if "end" in chunk and interpreter.os:
                         last_message = interpreter.messages[-1]["content"]
@@ -345,12 +422,16 @@ def terminal_interface(interpreter, message):
                 # Assistant code blocks
                 elif chunk["role"] == "assistant" and chunk["type"] == "code":
                     if "start" in chunk:
+                        flush_pending(force=True)
+
                         active_block = CodeBlock()
                         active_block.language = chunk["format"]
                         render_cursor = True
+                        reset_pending()
 
                     if "content" in chunk:
-                        active_block.code += chunk["content"]
+                        pending_updates["code"].append(chunk["content"])
+                        flush_pending(force="\n" in chunk["content"])
 
                 # Computer can display visual types to user,
                 # Which sometimes creates more computer output (e.g. HTML errors, eventually)
@@ -422,21 +503,15 @@ def terminal_interface(interpreter, message):
 
                 # Console
                 if chunk["type"] == "console":
+                    if not active_block:
+                        continue
                     render_cursor = False
                     if "format" in chunk and chunk["format"] == "output":
-                        active_block.output += "\n" + chunk["content"]
-                        active_block.output = (
-                            active_block.output.strip()
-                        )  # ^ Aesthetic choice
-
-                        # Truncate output
-                        active_block.output = truncate_output(
-                            active_block.output,
-                            interpreter.max_output,
-                            add_scrollbars=False,
-                        )  # ^ Notice that this doesn't add the "scrollbars" line, which I think is fine
+                        pending_updates["output"].append(chunk["content"])
+                        flush_pending(force="\n" in chunk["content"])
                     if "format" in chunk and chunk["format"] == "active_line":
-                        active_block.active_line = chunk["content"]
+                        pending_updates["active_line"] = chunk["content"]
+                        flush_pending(force=True)
 
                         # Display action notifications if we're in OS mode
                         if interpreter.os and active_block.active_line != None:
@@ -509,12 +584,14 @@ def terminal_interface(interpreter, message):
                             if active_block:
                                 active_block.end()
                             active_block = CodeBlock()
+                            reset_pending()
 
                 if active_block:
-                    active_block.refresh(cursor=render_cursor)
+                    flush_pending()
 
             # (Sometimes -- like if they CTRL-C quickly -- active_block is still None here)
             if "active_block" in locals():
+                flush_pending(force=True)
                 if active_block:
                     active_block.end()
                     active_block = None
