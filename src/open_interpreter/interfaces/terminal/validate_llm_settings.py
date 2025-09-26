@@ -14,6 +14,10 @@ from prompt_toolkit import prompt
 from open_interpreter.interfaces.terminal.contributing_conversations import (
     contribute_conversation_launch_logic,
 )
+from open_interpreter.interfaces.terminal.components.ui import (
+    STATUS_ICONS,
+    apply_brand_header,
+)
 
 
 def validate_llm_settings(interpreter):
@@ -117,13 +121,12 @@ def display_welcome_message_once(interpreter):
     (Uses an internal attribute `_displayed` to track its state.)
     """
     if not hasattr(display_welcome_message_once, "_displayed"):
-        interpreter.display_message(
-            """
-        ●
-
-        Welcome to **Open Interpreter**.
-        """
+        header = apply_brand_header(
+            f"{STATUS_ICONS['info']} Welcome to **Open Interpreter**.",
+            profile=getattr(interpreter, "active_profile", None),
         )
+
+        interpreter.display_message(header)
         time.sleep(1)
 
         display_welcome_message_once._displayed = True

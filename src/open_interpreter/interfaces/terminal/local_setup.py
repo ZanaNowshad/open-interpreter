@@ -11,6 +11,11 @@ import psutil
 import requests
 import wget
 
+from open_interpreter.interfaces.terminal.components.ui import (
+    STATUS_ICONS,
+    apply_brand_header,
+)
+
 
 def local_setup(interpreter, provider=None, model=None):
     def download_model(models_dir, models, interpreter):
@@ -189,7 +194,15 @@ def local_setup(interpreter, provider=None, model=None):
 
     # START OF LOCAL MODEL PROVIDER LOGIC
     interpreter.display_message(
-        "\n**Open Interpreter** supports multiple local model providers.\n"
+        apply_brand_header(
+            "\n".join(
+                [
+                    f"{STATUS_ICONS['info']} Local model setup wizard.",
+                    "Choose how you would like to run models locally.",
+                ]
+            ),
+            profile=getattr(interpreter, "active_profile", None),
+        )
     )
 
     # Define the choices for local models
