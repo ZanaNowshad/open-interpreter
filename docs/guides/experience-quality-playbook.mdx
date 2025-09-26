@@ -1,0 +1,93 @@
+---
+title: Experience Quality Playbook
+---
+
+## 1. Usability Test Scripts
+
+### 1.1 Participant Mix
+- **Novice users**: First-time setup, limited technical background.
+- **Intermediate users**: Familiar with AI assistants, occasional customization.
+- **Power users**: Regularly automate workflows, comfortable with advanced configuration.
+- Recruit across desktop, mobile, and assistive technology users to observe cross-platform parity.
+
+### 1.2 Moderated Study Scripts
+
+| Flow | Participant Profile | Session Goals | Key Tasks | Moderator Prompts | Success Signals |
+| --- | --- | --- | --- | --- | --- |
+| **Initial Setup** | Novice & Intermediate | Validate onboarding clarity and requirement discoverability. | 1. Install or launch the product.<br>2. Authenticate and complete first-run configuration.<br>3. Execute "Hello World" style interaction. | "Talk through what you expect to happen next."<br>"What, if anything, is confusing about this step?" | Participant completes setup without external help and can run first command.<br>Time-on-task ≤ target benchmark (record actual). |
+| **Resume Conversation** | Intermediate | Evaluate continuity cues when returning after an idle period. | 1. Reopen the product after 24h simulated gap.<br>2. Review prior conversation history.<br>3. Continue thread with follow-up question. | "How do you know where you left off?"<br>"What helps you trust the system remembers context?" | Participant finds last message within 2 interactions.<br>Confidence rating ≥ 4/5 on conversation persistence. |
+| **Approval Flow** | Power | Assess transparency of execution review and safeguards. | 1. Submit multi-step automation requiring approval.<br>2. Review proposed actions, edit as needed.<br>3. Approve or reject with rationale. | "Walk me through your decision to approve or decline."<br>"What information would increase your confidence?" | Participant understands each step's impact.<br>No critical information gaps reported.<br>Approval decision completed within expected SLA. |
+
+### 1.3 Unmoderated Study Scripts
+
+| Flow | Scenario Narrative | Task Steps | Survey Questions | Behavioral Metrics |
+| --- | --- | --- | --- | --- |
+| **Initial Setup** | "Imagine you just installed the assistant to help with daily tasks." | 1. Launch installer/start CLI.<br>2. Configure required tokens/settings.<br>3. Complete tutorial task provided in-product. | SUS questionnaire plus task-specific Likert (clarity, confidence). | Completion rate, time-on-task, error count, rage clicks/undos. |
+| **Resume Conversation** | "You received an update and want to continue yesterday's thread." | 1. Access previous conversation log.<br>2. Summarize last action in text box.<br>3. Send follow-up request referencing earlier output. | Single Ease Question (SEQ), Net Satisfaction (0-10). | Navigation path length, scroll depth, re-open rate of transcripts. |
+| **Approval Flow** | "Before running automation, review system proposal." | 1. Inspect execution plan.<br>2. Modify at least one step.<br>3. Approve with comment or decline. | Perceived transparency (1-5).<br>"What would you change about this review screen?" | Modification rate, dwell time on risk indicators, post-task confidence. |
+
+### 1.4 Session Logistics
+- **Artifacts**: Screen/audio recordings, annotated notes, session transcripts.
+- **Pre-session survey**: Experience level, primary platform, accessibility needs.
+- **Post-session debrief**: Collect qualitative quotes, top friction points, enhancement ideas.
+- **Cadence**: Monthly moderated deep dives, quarterly unmoderated benchmark runs.
+
+## 2. Accessibility & Performance Audit Procedures
+
+### 2.1 WCAG 2.2 AA Checklist
+
+#### Contrast Analysis
+1. Inventory all interactive components, text styles, and state variations (default, hover, focus, disabled).
+2. Use tools such as Axe DevTools, Stark, or the `@adobe/leonardo-contrast` CLI for primary surfaces; validate custom themes with manual calculations.
+3. Confirm minimum 4.5:1 ratio for standard text and 3:1 for large text/icons; ensure non-text elements (graphs, controls) meet 3:1 contrast against adjacent colors.
+4. Document failures with screenshot, component ID, token reference, and recommended remediation.
+
+#### Keyboard Navigation
+1. Map end-to-end flows (setup, resume, approval) and determine focus order expectations.
+2. Perform tab/shift-tab traversal on desktop web, desktop app (if applicable), and responsive breakpoints.
+3. Validate focus indicators are visible (WCAG 2.2 Focus Appearance) and that focus is trapped appropriately within modals or drawers.
+4. Confirm all actionable elements are reachable without pointer devices and that shortcuts are discoverable and remappable.
+5. Record timing for high-frequency tasks to ensure no step takes longer via keyboard than pointer-based navigation by more than 25%.
+
+#### Screen Reader Smoke Tests
+1. Test with NVDA (Windows), VoiceOver (macOS/iOS), and TalkBack (Android) on representative builds.
+2. Verify landmark regions (header, navigation, main, complementary) and ARIA labels for critical controls.
+3. Ensure dynamic updates (streaming responses, approval status) announce via polite or assertive live regions as appropriate.
+4. Check conversational context is communicated (message timestamps, speaker attribution, approval state) and that instructions are concise.
+5. Document any verbosity, focus loss, or unsupported gestures, assigning severity and remediation owners.
+
+### 2.2 Performance Benchmarks
+- **Core metrics**: Time to Interactive (TTI), First Contentful Paint (FCP), Time to First Token (for streamed responses), Largest Contentful Paint (LCP), and Interaction to Next Paint (INP).
+- **Tooling**: Lighthouse CI, WebPageTest, local throttling via Chrome DevTools, and built-in telemetry dashboards for production data.
+- **Target thresholds**:
+  - FCP ≤ 1.8s on cable broadband, ≤ 3.0s on 4G.
+  - Time to First Token ≤ 2.0s for cached models, ≤ 4.0s uncached.
+  - INP ≤ 200ms across interactive elements.
+- **Process**: Run synthetic tests before each release, capture real-user monitoring (RUM) weekly, and regress any metric >10% degradation.
+- **Reporting**: Maintain shared dashboard with trendlines, annotate major releases, and link to relevant Jira issues for follow-up.
+
+## 3. Branding & Reliability Review Checklists
+
+### 3.1 Branding Consistency
+- [ ] Visual tokens reference a single source of truth (design system Figma or token JSON) with version noted.
+- [ ] Typography scale applied consistently across web, desktop, CLI, and mobile surfaces.
+- [ ] Iconography uses approved set (size, stroke weight, color overrides) with alt text or aria-labels defined.
+- [ ] Tone of voice aligns with brand guidelines (concise, empathetic, expert) in tooltips, system messages, and approvals.
+- [ ] Localization coverage verified: strings externalized, fallback language defined, RTL layouts reviewed, pluralization rules tested.
+- [ ] Conversational avatars, color accents, and badges match brand accessibility ratios.
+- [ ] Documentation and release notes reuse canonical terminology for flows (Setup, Resume Conversation, Approval) to avoid divergence.
+
+### 3.2 Reliability & Artifact Handling
+- [ ] Execution artifacts (logs, files, outputs) are timestamped, signed, and tagged with originating session ID.
+- [ ] Cross-platform parity confirmed: desktop, web, and mobile clients surface identical approval details and decision history.
+- [ ] Retry and fallback logic documented for model failures, network outages, and permission denials.
+- [ ] Error states provide actionable next steps, contact links, and preserve user input for retry.
+- [ ] Audit trail export validated for compliance (GDPR/CCPA) with configurable retention periods.
+- [ ] Automated alerts monitor drift in approval latency, completion rate, and artifact delivery success.
+- [ ] Disaster recovery drill completed quarterly; restore tests ensure artifacts remain intact post-rollback.
+
+### 3.3 Review Cadence
+- **Pre-release**: Run full branding and reliability checklist at feature freeze, capture deviations in QA tracker.
+- **Post-release**: Conduct 30-day retro reviewing localization bugs, artifact incident reports, and tone feedback.
+- **Governance**: Assign owners per surface area (design, engineering, localization, compliance) and require sign-off before closing release epic.
+
