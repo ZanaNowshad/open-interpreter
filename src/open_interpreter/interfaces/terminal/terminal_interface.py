@@ -21,6 +21,7 @@ from ..core.utils.system_debug_info import system_info
 from ..core.utils.truncate_output import truncate_output
 from .components.code_block import CodeBlock
 from .components.message_block import MessageBlock
+from .command_palette import open_command_palette
 from .magic_commands import handle_magic_command
 from .utils.check_for_package import check_for_package
 from .utils.cli_input import cli_input
@@ -113,6 +114,13 @@ def terminal_interface(interpreter, message):
         if isinstance(message, str):
             # This is for the terminal interface being used as a CLI — messages are strings.
             # This won't fire if they're in the python package, display=True, and they passed in an array of messages (for example).
+
+            if message.strip() == "::":
+                if getattr(interpreter, "_command_palette_enabled", True):
+                    open_command_palette(interpreter)
+                else:
+                    interpreter.display_message("> Command palette is not available in this mode.")
+                continue
 
             if message == "":
                 # Ignore empty messages when user presses enter without typing anything

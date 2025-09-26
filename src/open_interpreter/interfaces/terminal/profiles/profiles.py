@@ -1,12 +1,14 @@
 import ast
 import glob
 import json
+import logging
 import os
 import platform
 import shutil
 import string
 import subprocess
 import time
+from typing import Callable
 
 import platformdirs
 import requests
@@ -28,7 +30,117 @@ default_profiles_names = [os.path.basename(path) for path in default_profiles_pa
 OI_VERSION = "0.2.5"
 
 
+logger = logging.getLogger(__name__)
+
+
+def _profile_format(name: str) -> str:
+    extension = os.path.splitext(name)[1].lower()
+    if extension in {".yaml", ".yml"}:
+        return "yaml"
+    if extension == ".json":
+        return "json"
+    if extension == ".py":
+        return "python"
+    return "unknown"
+
+
+def _determine_profile_source(filename_or_url: str, profile_path: str) -> str:
+    if filename_or_url in default_profiles_names:
+        return "default"
+    if filename_or_url.startswith(("http://", "https://")):
+        return "remote"
+    if os.path.exists(profile_path):
+        return "user"
+    return "custom"
+
+
+def _resolve_profile_path(filename_or_url: str, profile_path: str) -> str | None:
+    if filename_or_url in default_profiles_names:
+        return os.path.join(oi_default_profiles_path, filename_or_url)
+    if os.path.exists(profile_path):
+        return profile_path
+    if filename_or_url.startswith(("http://", "https://")):
+        return filename_or_url
+    return profile_path if profile_path else None
+
+
+def _build_profile_metadata(
+    name: str,
+    origin: str,
+    path: str | None,
+    source: str,
+    profile_data,
+) -> dict:
+    metadata = {
+        "name": name,
+        "origin": origin,
+        "path": path,
+        "source": source,
+        "format": _profile_format(name),
+        "version": None,
+    }
+
+    if isinstance(profile_data, dict):
+        metadata["version"] = profile_data.get("version")
+
+    return metadata
+
+
+def _safe_read_profile_version(path: str) -> str | None:
+    try:
+        if path.endswith((".yaml", ".yml")):
+            with open(path, "r", encoding="utf-8") as file:
+                data = yaml.safe_load(file)
+            if isinstance(data, dict):
+                return data.get("version")
+        elif path.endswith(".json"):
+            with open(path, "r", encoding="utf-8") as file:
+                data = json.load(file)
+            if isinstance(data, dict):
+                return data.get("version")
+    except Exception:
+        logger.debug("Failed to read profile version from %s", path, exc_info=True)
+    return None
+
+
+def list_available_profiles() -> list[dict]:
+    profiles: list[dict] = []
+
+    for path in sorted(default_profiles_paths):
+        name = os.path.basename(path)
+        profiles.append(
+            {
+                "name": name,
+                "identifier": name,
+                "source": "default",
+                "path": path,
+                "format": _profile_format(name),
+                "version": OI_VERSION,
+            }
+        )
+
+    if os.path.exists(profile_dir):
+        for name in sorted(os.listdir(profile_dir)):
+            file_path = os.path.join(profile_dir, name)
+            if not os.path.isfile(file_path):
+                continue
+
+            profiles.append(
+                {
+                    "name": name,
+                    "identifier": name,
+                    "source": "user",
+                    "path": file_path,
+                    "format": _profile_format(name),
+                    "version": _safe_read_profile_version(file_path),
+                }
+            )
+
+    return sorted(profiles, key=lambda item: (item["source"] != "default", item["name"].lower()))
+
+
 def profile(interpreter, filename_or_url):
+    requested_profile = filename_or_url
     # See if they're doing shorthand for a default profile
     filename_without_extension = os.path.splitext(filename_or_url)[0]
     for profile in default_profiles_names:
@@ -61,7 +173,23 @@ def profile(interpreter, filename_or_url):
             else:
                 raise
 
-    return apply_profile(interpreter, profile, profile_path)
+    interpreter = apply_profile(interpreter, profile, profile_path)
+
+    resolved_name = os.path.basename(filename_or_url)
+    metadata_path = _resolve_profile_path(filename_or_url, profile_path)
+    source = _determine_profile_source(filename_or_url, profile_path)
+    metadata = _build_profile_metadata(
+        resolved_name,
+        requested_profile,
+        metadata_path,
+        source,
+        profile,
+    )
+
+    interpreter.profile_metadata = metadata
+    interpreter.active_profile = metadata
+
+    return interpreter
 
 
 def get_profile(filename_or_url, profile_path):
@@ -588,66 +716,85 @@ def open_storage_dir(directory):
     return
 
 
-def reset_profile(specific_default_profile=None):
-    if (
-        specific_default_profile
-        and specific_default_profile not in default_profiles_names
-    ):
+def reset_profile(
+    specific_default_profile=None,
+    *,
+    non_interactive: bool = False,
+    confirm: bool = False,
+    log: Callable[[str], None] | None = None,
+) -> list[str]:
+    logger_fn = log or logger.info
+
+    if specific_default_profile in {None, "NOT_PROVIDED", "default"}:
+        targets = ["default.yaml"]
+    elif specific_default_profile in default_profiles_names:
+        targets = [specific_default_profile]
+    else:
         raise ValueError(
             f"The specific default profile '{specific_default_profile}' is not a default profile."
         )
 
-    # Check version, before making the profile directory
+    summary: list[str] = []
     current_version = determine_user_version()
+    os.makedirs(profile_dir, exist_ok=True)
 
-    for default_yaml_file in default_profiles_paths:
-        filename = os.path.basename(default_yaml_file)
-
-        if specific_default_profile and filename != specific_default_profile:
-            continue
-
-        # Only reset default.yaml, all else are loaded from python package
-        if specific_default_profile != "default.yaml":
-            continue
-
+    for filename in targets:
+        default_path = os.path.join(oi_default_profiles_path, filename)
         target_file = os.path.join(profile_dir, filename)
 
-        # Variable to see if we should display the 'reset' print statement or not
-        create_oi_directory = False
-
-        # Make the profile directory if it does not exist
-        if not os.path.exists(profile_dir):
-            if not os.path.exists(oi_dir):
-                create_oi_directory = True
-
-            os.makedirs(profile_dir)
+        if not os.path.exists(default_path):
+            message = f"Default profile '{filename}' could not be found."
+            logger_fn(message)
+            if not non_interactive:
+                print(message)
+            summary.append(message)
+            continue
 
         if not os.path.exists(target_file):
-            shutil.copy(default_yaml_file, target_file)
+            shutil.copy(default_path, target_file)
             if current_version is None:
-                # If there is no version, add it to the default yaml
                 with open(target_file, "a") as file:
                     file.write(
                         f"\nversion: {OI_VERSION}  # Profile version (do not modify)"
                     )
-            if not create_oi_directory:
-                print(f"{filename} has been reset.")
-        else:
-            with open(target_file, "r") as file:
-                current_profile = file.read()
-            if current_profile not in historical_profiles:
-                user_input = input(f"Would you like to reset/update {filename}? (y/n) ")
-                if user_input.lower() == "y":
-                    send2trash.send2trash(
-                        target_file
-                    )  # This way, people can recover it from the trash
-                    shutil.copy(default_yaml_file, target_file)
-                    print(f"{filename} has been reset.")
-                else:
-                    print(f"{filename} was not reset.")
+            message = f"{filename} has been reset."
+            logger_fn(message)
+            if not non_interactive:
+                print(message)
+            summary.append(f"Reset {filename} -> {target_file}")
+            continue
+
+        with open(target_file, "r", encoding="utf-8") as file:
+            current_profile = file.read()
+
+        if current_profile not in historical_profiles:
+            if non_interactive:
+                proceed = confirm
             else:
-                shutil.copy(default_yaml_file, target_file)
-                print(f"{filename} has been reset.")
+                response = input(f"Would you like to reset/update {filename}? (y/n) ")
+                proceed = response.strip().lower() == "y"
+
+            if not proceed:
+                message = f"{filename} was not reset."
+                logger_fn(message)
+                if not non_interactive:
+                    print(message)
+                summary.append(message)
+                continue
+
+            try:
+                send2trash.send2trash(target_file)
+            except Exception:
+                logger.debug("Failed to move %s to trash.", target_file, exc_info=True)
+
+        shutil.copy(default_path, target_file)
+        message = f"{filename} has been reset."
+        logger_fn(message)
+        if not non_interactive:
+            print(message)
+        summary.append(f"Reset {filename} -> {target_file}")
+
+    return summary
 
 
 def get_default_profile(specific_default_profile):
@@ -753,16 +900,30 @@ def migrate_app_directory(old_dir, new_dir, profile_dir):
                     file.write("\nversion: 0.2.1  # Profile version (do not modify)")
 
 
-def migrate_user_app_directory():
+def migrate_user_app_directory(
+    *, log: Callable[[str], None] | None = None
+) -> list[str]:
+    logger_fn = log or logger.info
     user_version = determine_user_version()
+    summary: list[str] = []
 
     if user_version == "pre_0.2.0":
         old_dir = platformdirs.user_config_dir("Open Interpreter")
         migrate_app_directory(old_dir, oi_dir, profile_dir)
+        message = f"Migrated profiles from '{old_dir}' to '{oi_dir}'."
+        logger_fn(message)
+        summary.append(message)
 
     elif user_version == "0.2.0":
         old_dir = platformdirs.user_config_dir("Open Interpreter Terminal")
         migrate_app_directory(old_dir, oi_dir, profile_dir)
+        message = f"Migrated profiles from '{old_dir}' to '{oi_dir}'."
+        logger_fn(message)
+        summary.append(message)
+    else:
+        logger_fn("Profile directory is already on the latest format; no migration needed.")
+
+    return summary
 
 
 def write_key_to_profile(key, value):
