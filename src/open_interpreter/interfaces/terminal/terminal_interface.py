@@ -8,6 +8,7 @@ try:
 except ImportError:
     pass
 
+import json
 import os
 import platform
 import random
@@ -15,12 +16,13 @@ import re
 import subprocess
 import tempfile
 import time
+from typing import Any, Dict, List, Optional
 
 from ..core.utils.scan_code import scan_code
 from ..core.utils.system_debug_info import system_info
 from ..core.utils.truncate_output import truncate_output
 from .components.code_block import CodeBlock
-from .components.message_block import MessageBlock
+from .components.message_block import MessageBlock, MessageSegment, parse_message_segments
 from .magic_commands import handle_magic_command
 from .utils.check_for_package import check_for_package
 from .utils.cli_input import cli_input
@@ -71,6 +73,14 @@ def terminal_interface(interpreter, message):
             interpreter_intro_message.append("Press `CTRL-C` to exit.")
 
         interpreter.display_message("\n\n".join(interpreter_intro_message) + "\n")
+
+    interpreter.get_live_transcript_blocks = lambda: build_transcript_blocks(
+        interpreter.messages
+    )
+    interpreter.transcript_as_json = lambda: transcript_to_json(interpreter.messages)
+    interpreter.transcript_as_markdown = lambda: transcript_to_markdown(
+        interpreter.messages
+    )
 
     if message:
         interactive = False
@@ -539,3 +549,209 @@ def terminal_interface(interpreter, message):
             if interpreter.debug:
                 system_info(interpreter)
             raise
+
+
+def build_transcript_blocks(messages: List[dict]) -> List[Dict[str, Any]]:
+    """Generate a structured representation of the live transcript."""
+
+    blocks: List[Dict[str, Any]] = []
+    active_code_block: Optional[Dict[str, Any]] = None
+
+    def finalize_code_block():
+        nonlocal active_code_block
+        if not active_code_block:
+            return
+
+        output_lines = [line for line in active_code_block.pop("output", []) if line]
+        active_code_block["console"] = "\n".join(output_lines).strip()
+        blocks.append(active_code_block)
+        active_code_block = None
+
+    for message in messages:
+        block_type = message.get("type")
+        role = message.get("role", "assistant")
+        fmt = message.get("format")
+        content = message.get("content", "")
+
+        if block_type == "code":
+            finalize_code_block()
+            active_code_block = {
+                "role": role,
+                "block_type": "code",
+                "language": fmt or "text",
+                "code": content,
+                "output": [],
+                "semantic_label": _semantic_label_for_code(role, fmt),
+            }
+            continue
+
+        if block_type == "console" and fmt in (None, "output"):
+            if active_code_block:
+                active_code_block.setdefault("output", []).append(content)
+                continue
+            blocks.append(
+                {
+                    "role": role,
+                    "block_type": "console",
+                    "format": fmt,
+                    "content": content,
+                    "semantic_label": _semantic_label_for_console(role, fmt),
+                }
+            )
+            continue
+
+        finalize_code_block()
+
+        if block_type == "message":
+            segments = [
+                _segment_to_export(segment)
+                for segment in parse_message_segments(content or "")
+            ]
+            blocks.append(
+                {
+                    "role": role,
+                    "block_type": "message",
+                    "segments": segments,
+                    "semantic_label": f"{role.title()} message",
+                }
+            )
+            continue
+
+        if block_type:
+            blocks.append(
+                {
+                    "role": role,
+                    "block_type": block_type,
+                    "format": fmt,
+                    "content": content,
+                    "semantic_label": _semantic_label_for_misc(role, block_type, fmt),
+                }
+            )
+
+    finalize_code_block()
+    return blocks
+
+
+def transcript_to_json(messages: List[dict]) -> str:
+    """Return the live transcript as formatted JSON."""
+
+    blocks = build_transcript_blocks(messages)
+    return json.dumps(blocks, indent=2, ensure_ascii=False)
+
+
+def transcript_to_markdown(messages: List[dict]) -> str:
+    """Render the live transcript in Markdown with semantic labels."""
+
+    blocks = build_transcript_blocks(messages)
+    lines: List[str] = []
+
+    def ensure_blank_line():
+        if lines and lines[-1] != "":
+            lines.append("")
+
+    for block in blocks:
+        ensure_blank_line()
+        lines.append(f"### {block['semantic_label']}")
+        lines.append("")
+
+        if block["block_type"] == "message":
+            for segment in block.get("segments", []):
+                kind = segment.get("kind")
+
+                if kind == "markdown":
+                    text = segment.get("text", "").strip("\n")
+                    if text:
+                        lines.append(text)
+                        lines.append("")
+                    continue
+
+                if kind == "code":
+                    language = segment.get("language", "text")
+                    snippet = segment.get("text", "")
+                    lines.append(f"**Code snippet ({language})**")
+                    lines.append(f"```{language}\n{snippet.rstrip()}\n```")
+                    lines.append("")
+                    continue
+
+                if kind == "callout":
+                    callout_type = segment.get("callout_type", "Note")
+                    title = segment.get("title", "")
+                    header = f"> [!{callout_type.upper()}]"
+                    if title:
+                        header += f" {title}"
+                    lines.append(header)
+                    body = segment.get("text", "")
+                    if body:
+                        for callout_line in body.splitlines():
+                            lines.append(f"> {callout_line}")
+                    lines.append("")
+                    continue
+
+            continue
+
+        if block["block_type"] == "code":
+            language = block.get("language", "text")
+            code = block.get("code", "")
+            lines.append(f"```{language}\n{code.rstrip()}\n```")
+            console = block.get("console", "")
+            if console:
+                lines.append("")
+                lines.append("> Console output")
+                for output_line in console.splitlines():
+                    lines.append(f"> {output_line}")
+            lines.append("")
+            continue
+
+        content = block.get("content", "")
+        if content:
+            lines.append(content)
+            lines.append("")
+
+    markdown = "\n".join(lines).strip()
+    return f"{markdown}\n" if markdown else ""
+
+
+def _segment_to_export(segment: MessageSegment) -> Dict[str, Any]:
+    if segment.kind == "code":
+        language = segment.language or "text"
+        return {
+            "kind": "code",
+            "language": language,
+            "text": segment.text,
+            "semantic_label": f"Code snippet in {language}",
+        }
+
+    if segment.kind == "callout" and segment.callout:
+        meta = segment.callout
+        return {
+            "kind": "callout",
+            "callout_type": meta.callout_type,
+            "title": meta.title,
+            "text": meta.body,
+            "semantic_label": f"{meta.callout_type} callout",
+        }
+
+    return {
+        "kind": "markdown",
+        "text": segment.text,
+        "semantic_label": "Markdown content",
+    }
+
+
+def _semantic_label_for_code(role: str, language: Optional[str]) -> str:
+    language_name = language or "plain text"
+    role_name = role.title() if role else "Assistant"
+    return f"{role_name} code execution ({language_name})"
+
+
+def _semantic_label_for_console(role: str, fmt: Optional[str]) -> str:
+    role_name = role.title() if role else "Assistant"
+    channel = fmt or "output"
+    return f"{role_name} console {channel}"
+
+
+def _semantic_label_for_misc(role: str, block_type: str, fmt: Optional[str]) -> str:
+    role_name = role.title() if role else "Assistant"
+    if fmt:
+        return f"{role_name} {block_type} ({fmt})"
+    return f"{role_name} {block_type}"
