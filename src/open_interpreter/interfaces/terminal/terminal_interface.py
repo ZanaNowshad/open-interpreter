@@ -12,6 +12,7 @@ import os
 import platform
 import random
 import re
+import shlex
 import subprocess
 import tempfile
 import time
@@ -24,8 +25,84 @@ from .components.message_block import MessageBlock
 from .magic_commands import handle_magic_command
 from .utils.check_for_package import check_for_package
 from .utils.cli_input import cli_input
-from .utils.display_output import display_output
+from .utils.artifact_manager import ArtifactManager
+from .utils.display_output import display_output, open_file
 from .utils.find_image_path import find_image_path
+
+
+def handle_artifact_quick_action(command: str, artifact_manager: ArtifactManager) -> bool:
+    try:
+        parts = shlex.split(command[1:])
+    except ValueError as exc:
+        print(f"Artifact command error: {exc}")
+        return True
+
+    if not parts:
+        return False
+
+    action = parts[0].lower()
+
+    if action in {"open", "o"}:
+        if len(parts) < 2:
+            print("Usage: :open <artifact_id>")
+            return True
+        artifact_id = _parse_artifact_id(parts[1])
+        if artifact_id is None:
+            return True
+        artifact = artifact_manager.get(artifact_id)
+        if not artifact:
+            print(f"No artifact found with id {artifact_id}.")
+            return True
+        try:
+            path = artifact.ensure_cached_path()
+        except Exception as exc:
+            print(f"Unable to load artifact {artifact_id}: {exc}")
+            return True
+        open_file(path)
+        print(f"Opened artifact {artifact_id} at {path}.")
+        return True
+
+    if action in {"save", "s"}:
+        if len(parts) < 3:
+            print("Usage: :save <artifact_id> <destination>")
+            return True
+        artifact_id = _parse_artifact_id(parts[1])
+        if artifact_id is None:
+            return True
+        destination = " ".join(parts[2:])
+        try:
+            saved_path = artifact_manager.save(artifact_id, destination)
+        except OSError as exc:
+            print(f"Failed to save artifact {artifact_id}: {exc}")
+            return True
+        if not saved_path:
+            print(f"No artifact found with id {artifact_id}.")
+        else:
+            print(f"Saved artifact {artifact_id} to {saved_path}.")
+        return True
+
+    if action in {"discard", "d"}:
+        if len(parts) < 2:
+            print("Usage: :discard <artifact_id>")
+            return True
+        artifact_id = _parse_artifact_id(parts[1])
+        if artifact_id is None:
+            return True
+        if artifact_manager.discard(artifact_id):
+            print(f"Discarded artifact {artifact_id}.")
+        else:
+            print(f"No artifact found with id {artifact_id}.")
+        return True
+
+    return False
+
+
+def _parse_artifact_id(raw_id: str):
+    try:
+        return int(raw_id)
+    except ValueError:
+        print(f"Invalid artifact id: {raw_id}")
+        return None
 
 # Add examples to the readline history
 examples = [
@@ -79,84 +156,89 @@ def terminal_interface(interpreter, message):
 
     active_block = None
     voice_subprocess = None
+    artifact_manager = ArtifactManager()
 
     while True:
         if interactive:
-            if (
-                len(interpreter.messages) == 1
-                and interpreter.messages[-1]["role"] == "user"
-                and interpreter.messages[-1]["type"] == "message"
-            ):
-                # They passed in a message already, probably via "i {command}"!
-                message = interpreter.messages[-1]["content"]
-                interpreter.messages = interpreter.messages[:-1]
-            else:
-                ### This is the primary input for Open Interpreter.
-                try:
-                    message = (
-                        cli_input("> ").strip()
-                        if interpreter.multi_line
-                        else input("> ").strip()
-                    )
-                except (KeyboardInterrupt, EOFError):
-                    # Treat Ctrl-D on an empty line the same as Ctrl-C by exiting gracefully
-                    interpreter.display_message("\n\n`Exiting...`")
-                    raise KeyboardInterrupt
+                if (
+                    len(interpreter.messages) == 1
+                    and interpreter.messages[-1]["role"] == "user"
+                    and interpreter.messages[-1]["type"] == "message"
+                ):
+                    # They passed in a message already, probably via "i {command}"!
+                    message = interpreter.messages[-1]["content"]
+                    interpreter.messages = interpreter.messages[:-1]
+                else:
+                    ### This is the primary input for Open Interpreter.
+                    try:
+                        message = (
+                            cli_input("> ").strip()
+                            if interpreter.multi_line
+                            else input("> ").strip()
+                        )
+                    except (KeyboardInterrupt, EOFError):
+                        # Treat Ctrl-D on an empty line the same as Ctrl-C by exiting gracefully
+                        interpreter.display_message("\n\n`Exiting...`")
+                        raise KeyboardInterrupt
 
-            try:
-                # This lets users hit the up arrow key for past messages
-                readline.add_history(message)
-            except:
-                # If the user doesn't have readline (may be the case on windows), that's fine
-                pass
+                try:
+                    # This lets users hit the up arrow key for past messages
+                    readline.add_history(message)
+                except:
+                    # If the user doesn't have readline (may be the case on windows), that's fine
+                    pass
 
         if isinstance(message, str):
-            # This is for the terminal interface being used as a CLI — messages are strings.
-            # This won't fire if they're in the python package, display=True, and they passed in an array of messages (for example).
+                # This is for the terminal interface being used as a CLI — messages are strings.
+                # This won't fire if they're in the python package, display=True, and they passed in an array of messages (for example).
 
-            if message == "":
-                # Ignore empty messages when user presses enter without typing anything
-                continue
+                if message == "":
+                    # Ignore empty messages when user presses enter without typing anything
+                    continue
 
-            if message.startswith("%") and interactive:
-                handle_magic_command(interpreter, message)
-                continue
+                if message.startswith(":") and interactive:
+                    if handle_artifact_quick_action(message, artifact_manager):
+                        continue
 
-            # Many users do this
-            if message.strip() == "interpreter --local":
-                print("Please exit this conversation, then run `interpreter --local`.")
-                continue
-            if message.strip() == "pip install --upgrade open-interpreter":
-                print(
-                    "Please exit this conversation, then run `pip install --upgrade open-interpreter`."
-                )
-                continue
+                if message.startswith("%") and interactive:
+                    handle_magic_command(interpreter, message)
+                    continue
 
-            if (
-                interpreter.llm.supports_vision
-                or interpreter.llm.vision_renderer != None
-            ):
-                # Is the input a path to an image? Like they just dragged it into the terminal?
-                image_path = find_image_path(message)
-
-                ## If we found an image, add it to the message
-                if image_path:
-                    # Add the text interpreter's message history
-                    interpreter.messages.append(
-                        {
-                            "role": "user",
-                            "type": "message",
-                            "content": message,
-                        }
+                # Many users do this
+                if message.strip() == "interpreter --local":
+                    print("Please exit this conversation, then run `interpreter --local`.")
+                    continue
+                if message.strip() == "pip install --upgrade open-interpreter":
+                    print(
+                        "Please exit this conversation, then run `pip install --upgrade open-interpreter`."
                     )
+                    continue
 
-                    # Pass in the image to interpreter in a moment
-                    message = {
-                        "role": "user",
-                        "type": "image",
-                        "format": "path",
-                        "content": image_path,
-                    }
+                if (
+                    interpreter.llm.supports_vision
+                    or interpreter.llm.vision_renderer != None
+                ):
+                    # Is the input a path to an image? Like they just dragged it into the terminal?
+                    image_path = find_image_path(message)
+
+                    ## If we found an image, add it to the message
+                    if image_path:
+                        # Add the text interpreter's message history
+                        interpreter.messages.append(
+                            {
+                                "role": "user",
+                                "type": "message",
+                                "content": message,
+                            }
+                        )
+
+                        # Pass in the image to interpreter in a moment
+                        message = {
+                            "role": "user",
+                            "type": "image",
+                            "format": "path",
+                            "content": image_path,
+                        }
 
         try:
             for chunk in interpreter.chat(message, display=False, stream=True):
@@ -389,7 +471,9 @@ def terminal_interface(interpreter, message):
                             continue
 
                     # Display and give extra output back to the LLM
-                    extra_computer_output = display_output(chunk)
+                    extra_computer_output = display_output(
+                        chunk, artifact_manager=artifact_manager
+                    )
 
                     # We're going to just add it to the messages directly, not changing `recipient` here.
                     # Mind you, the way we're doing this, this would make it appear to the user if they look at their conversation history,
@@ -522,7 +606,8 @@ def terminal_interface(interpreter, message):
 
             if not interactive:
                 # Don't loop
-                break
+                artifact_manager.cleanup()
+                return
 
         except KeyboardInterrupt:
             # Exit gracefully
@@ -534,8 +619,10 @@ def terminal_interface(interpreter, message):
                 # (this cancels LLM, returns to the interactive "> " input)
                 continue
             else:
-                break
+                artifact_manager.cleanup()
+                return
         except:
             if interpreter.debug:
                 system_info(interpreter)
+            artifact_manager.cleanup()
             raise
